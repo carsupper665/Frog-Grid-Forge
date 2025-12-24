@@ -39,6 +39,7 @@ type UserDevice struct {
 var (
 	ErrCodeAlreadySet = errors.New("verification code already set and not expired")
 	CodeValidity      = 5 * time.Minute
+	ErrNotFound       = gorm.ErrRecordNotFound
 )
 
 func RootUserExists() bool {
@@ -106,6 +107,10 @@ func DeleteDevice(deviceID string) error {
 }
 
 func SetVerificationCode(userID uint, code string) error {
+	//==================================//
+	// 現在這個用法是存Token看有沒有重複發送	//
+	//==================================//
+	// TODO Update to save emailToken and sent time
 	// 1) 先把現有的 code + sentAt 撈出
 	var u User
 	if err := DB.Select("verification_code", "verification_sent_at").
@@ -131,6 +136,7 @@ func SetVerificationCode(userID uint, code string) error {
 }
 
 // GetVerificationCode retrieves both the code and the time it was sent.
+// TODO Update to get emailToken
 func GetVerificationCode(userEmail string) (code string, sentAt time.Time, err error) {
 	var user User
 	err = DB.
@@ -164,6 +170,21 @@ func GetUserByEmail(email string) (User, error) {
 		Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
+			return User{}, err
+		}
+		return User{}, err
+	}
+	return user, nil
+}
+
+func GetUserByID(userID uint) (User, error) {
+	var user User
+	err := DB.
+		Where("id = ?", userID).
+		First(&user).
+		Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return User{}, err
 		}
 		return User{}, err

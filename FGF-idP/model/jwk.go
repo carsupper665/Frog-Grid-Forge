@@ -1,6 +1,7 @@
 package model
 
 import (
+	"FGF-idP/common"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -93,6 +94,26 @@ func GetKeyBySid(sid string) ([]JwkKey, error) {
 		Where("service_id = ? AND is_active = ?", sid, true).
 		Find(&keys).Error
 	return keys, err
+}
+
+func ValiClient(clientID, redirectURI, clientSecret string) (bool, string, error) {
+	var client Client
+	err := DB.Where("client_id = ?", clientID).First(&client).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, "Client not found", nil
+		}
+		return false, "Database err: " + err.Error(), err
+	}
+	isValid, msg, err := ValiClientWithUrl(clientID, redirectURI)
+	if err != nil {
+		return false, msg, err
+	}
+	isValid = common.ValidatePasswordAndHash(clientSecret, client.SecretHash)
+	if !isValid {
+		return false, msg, nil
+	}
+	return true, "", nil
 }
 
 func ValiClientWithUrl(clientID, redirectURI string) (bool, string, error) {

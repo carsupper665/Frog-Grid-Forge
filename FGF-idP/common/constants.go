@@ -15,6 +15,7 @@ const (
 
 const (
 	JwtCookieName    = "au4ul4"
+	DeviceCookieName = "did"
 	JwtExpireSeconds = 24 * 60 * 60 * 7
 )
 

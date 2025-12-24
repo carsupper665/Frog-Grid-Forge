@@ -15,7 +15,7 @@ func AuthRouter(router *gin.Engine) {
 		middleware.CORS(),
 		middleware.IpRateLimiter(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration),
 	)
-	wk.GET("/openid-configuration", controller.JwksMetadata)
+	wk.GET("/openid-configuration/", controller.JwksMetadata)
 	wk.GET("/keys", controller.JwksKeys) // JWKS public keys
 	//wk.GET("/keys/:sid", controller.GetKeysBySid)
 
@@ -25,12 +25,12 @@ func AuthRouter(router *gin.Engine) {
 		middleware.IpRateLimiter(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration),
 	)
 
-	rootRouter.GET("/auth")
+	rootRouter.GET("/auth", controller.Auth)
 
-	rootRouter.POST("/login")
+	rootRouter.POST("/login", controller.Login)
 	rootRouter.POST("/logout")
 
-	rootRouter.POST("/token")
+	rootRouter.POST("/token", controller.Token)
 	rootRouter.GET("/userinfo")
 	rootRouter.POST("/revoke")
 }

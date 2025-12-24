@@ -8,17 +8,21 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt"
 	"golang.org/x/crypto/bcrypt"
 )
 
+var Issuer = GetEnvOrDefaultString("FRONTEND_BASE_URL", "http://127.0.0.1:3000")
 var ErrKeyNotFound = errors.New("signing key not found")
 
 func GenerateHMACWithKey(key []byte, data string) string {
@@ -61,19 +65,52 @@ func GenerateDeviceIDWithIP(ip string) string {
 	return hex.EncodeToString(id)
 }
 
-func GenJWT(uid uint, deviceHash, aud, email string) (string, error) {
+func GenerateAccessToken(userID uint, clientID, audience, scope string) (string, error) {
+	now := time.Now()
+
 	claims := jwt.MapClaims{
-		"iss":    GetEnvOrDefaultString("FRONTEND_BASE_URL", ""),
-		"sub":    uid,
-		"aud":    aud,
-		"email":  email,
-		"device": deviceHash,
-		"exp":    time.Now().Add(time.Hour).Unix(),
-		"iat":    time.Now().Unix(),
+		"iss":       Issuer,             // 你的 IdP base URL，例如 "https://idp.fgf.local"
+		"sub":       fmt.Sprint(userID), // 使用者 ID（字串）
+		"aud":       audience,           // target API / resource server
+		"client_id": clientID,           // 哪個 client 要的 token
+		"scope":     scope,              // "openid profile ..."
+		"exp":       now.Add(JwtExpireSeconds).Unix(),
+		"iat":       now.Unix(),
 	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	idTokenStr, err := token.SignedString(CryptoSecret)
-	return idTokenStr, err
+	signed, err := token.SignedString(RSAPrivateKey) // 注意這裡要的是 *rsa.PrivateKey 物件，不是 PEM 字串
+	return signed, err
+}
+
+func GenerateIDToken(userID uint, clientID, nonce string) (string, error) {
+	if RSAPrivateKey == nil {
+		return "", fmt.Errorf("RSAPrivateKey is nil; make sure keys are initialized")
+	}
+
+	now := time.Now()
+
+	claims := jwt.MapClaims{
+		"iss": Issuer,             // IdP 的 Issuer URL
+		"sub": fmt.Sprint(userID), // 使用者 ID，要是字串
+		"aud": clientID,           // 這顆 ID Token 給哪個 client 用
+		"exp": now.Add(JwtExpireSeconds).Unix(),
+		"iat": now.Unix(),
+		// 可以視需求加 "auth_time": authTime.Unix(),
+	}
+
+	// 如果 Auth Request 有帶 nonce，就回寫進 ID Token
+	if nonce != "" {
+		claims["nonce"] = nonce
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+
+	signed, err := token.SignedString(RSAPrivateKey)
+	if err != nil {
+		return "", fmt.Errorf("signing id_token failed: %w", err)
+	}
+	return signed, nil
 }
 
 // GenerateRSAKeyPair 會在當前目錄產生：
@@ -216,4 +253,68 @@ func GetJWTPayload(token string) (map[string]interface{}, error) {
 	}
 
 	return nil, jwt.NewValidationError("invalid token claims", jwt.ValidationErrorClaimsInvalid)
+}
+
+type VerifyPayload struct {
+	UserEmail string `json:"user_email"`
+	Exp       int64  `json:"exp"` // min
+}
+
+func GenEmailSignedToken(userEmail string) (string, error) {
+	payload := VerifyPayload{
+		UserEmail: userEmail,
+		Exp:       time.Now().Add(5 * time.Minute).Unix(),
+	}
+	data, _ := json.Marshal(payload)
+	key := []byte(CryptoSecret)
+	// HMAC-SHA256 Signature
+	mac := hmac.New(sha256.New, key)
+	mac.Write(data)
+	sig := mac.Sum(nil)
+	token := base64.RawURLEncoding.EncodeToString(data) + "." +
+		base64.RawURLEncoding.EncodeToString(sig)
+	return token, nil
+}
+
+func VerifySignedToken(token string) (*VerifyPayload, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid token")
+	}
+
+	data, _ := base64.RawURLEncoding.DecodeString(parts[0])
+	sig, _ := base64.RawURLEncoding.DecodeString(parts[1])
+
+	key := []byte(CryptoSecret)
+	mac := hmac.New(sha256.New, key)
+	mac.Write(data)
+	expected := mac.Sum(nil)
+
+	if !hmac.Equal(sig, expected) {
+		return nil, fmt.Errorf("invalid signature")
+	}
+
+	var payload VerifyPayload
+	_ = json.Unmarshal(data, &payload)
+
+	if time.Now().Unix() > payload.Exp {
+		return nil, fmt.Errorf("token expired")
+	}
+
+	return &payload, nil
+}
+
+func VerifyPKCE(codeVerifier, codeChallenge, method string) bool {
+	switch method {
+	case "S256":
+		h := sha256.New()
+		h.Write([]byte(codeVerifier))
+		hashed := h.Sum(nil)
+		encoded := base64.RawURLEncoding.EncodeToString(hashed)
+		return encoded == codeChallenge
+	case "plain":
+		return codeVerifier == codeChallenge
+	default:
+		return false
+	}
 }
