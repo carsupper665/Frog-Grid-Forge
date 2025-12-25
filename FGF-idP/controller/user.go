@@ -18,8 +18,8 @@ import (
 var loginUrl = "/x/login?req_id="
 
 type loginReq struct {
-	Username string `json:"username" binding:"required_without=Email"`
-	Email    string `json:"email"    binding:"required_without=Username"`
+	Email    string `json:"email" binding:"omitempty,email"`
+	Username string `json:"username" binding:"omitempty"`
 	Password string `json:"password" binding:"required"`
 	ReqID    string `json:"req_id"   binding:"required"`
 }
@@ -92,7 +92,7 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	c.GetHeader("")
+	//c.GetHeader("")
 
 	if req.ReqID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_req_id"})
@@ -110,6 +110,7 @@ func Login(c *gin.Context) {
 	if req.Email != "" {
 		user, loginErr = model.LoginByEmail(req.Email)
 		if loginErr != nil {
+			common.LogError(c, "LoginByEmail error: "+loginErr.Error())
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_credentials"})
 			return
 		}
@@ -123,20 +124,27 @@ func Login(c *gin.Context) {
 	password := req.Password + user.Salt
 	valid := common.ValidatePasswordAndHash(password, user.Password)
 	if !valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_credentials"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "wrong_password"})
 		return
 	}
 
 	// Check Device id is in User login Allowed Devices
 	dId, dIdErr := c.Cookie(common.DeviceCookieName)
-	if errors.Is(dIdErr, http.ErrNoCookie) {
-		userStr := strconv.FormatUint(uint64(user.ID), 10)
-		dId = common.GetRandomString(16) + userStr
-		c.SetCookie(common.DeviceCookieName, dId, 360*24*60*60, "/", "", false, true)
-		CreateVerificationToken(c, user, authReq.ID)
-		c.JSON(203, gin.H{"message": "new_device_detected, Varify code sent to email", "email": user.Email})
+	if dIdErr != nil {
+		if errors.Is(dIdErr, http.ErrNoCookie) {
+			userStr := strconv.FormatUint(uint64(user.ID), 10)
+			dId = common.GetRandomString(16) + userStr
+			c.SetCookie(common.DeviceCookieName, dId, 360*24*60*60, "/", "", false, true)
+			CreateVerificationToken(c, user, authReq.ID)
+			c.JSON(203, gin.H{"message": "new_device_detected, Varify code sent to email", "email": user.Email})
+			return
+		}
+		common.LogError(c.Request.Context(), "Device cookie error: "+dIdErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cookie_error"})
 		return
+
 	}
+
 	isExist, err := model.IsDeviceExists(dId)
 	if err != nil || !isExist {
 		if err != nil { // Just in case err is not nil
@@ -158,14 +166,14 @@ func CreateVerificationToken(c *gin.Context, user model.User, reqId string) {
 	}
 	err = model.SetVerificationCode(user.ID, emailToken)
 	if err != nil {
-		if err.Error() == "verification code already set and not expired" {
+		if errors.Is(err, model.ErrCodeAlreadySet) {
 			return
 		}
 		common.LogError(c.Request.Context(), "SetVerificationCode error: "+err.Error())
 		return
 	}
 
-	verifyUrl := common.GetEnvOrDefaultString("FRONTEND_BASE_URL", "http://localhost:3000/") + "/verify?t=" + url.QueryEscape(emailToken)
+	verifyUrl := common.GetEnvOrDefaultString("FRONTEND_BASE_URL", "http://localhost:3000/") + "/x/verify?t=" + url.QueryEscape(emailToken)
 
 	htmlMsg := fmt.Sprintf(
 		`<!DOCTYPE html>
@@ -312,8 +320,8 @@ func Auth(c *gin.Context) {
 	codeChallenge := c.Query("code_challenge")
 	codeChallengeMethod := c.Query("code_challenge_method")
 
+	// URI Not validated here, will return error to client if invalid
 	if responseType != "code" {
-		// 如果 redirectURI 合法，建議用 redirect 回去帶 error
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_response_type"})
 		return
 	}
@@ -437,7 +445,7 @@ func verifyAuthCodeInternal(code, clientID, redirectURI, codeVerifier string) (*
 }
 
 func issueTokens(userID uint, clientID, scope, nonce string) (accessToken string, idToken string, refreshToken string, err error) {
-	accessToken, err = common.GenerateAccessToken(userID, clientID, scope, nonce)
+	accessToken, err = common.GenerateAccessToken(userID, clientID, scope)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -467,6 +475,7 @@ func issueCodeAndRedirect(c *gin.Context, authReq *AuthRequest, userId uint) {
 		IsUsed:              false,
 	}
 	setAuthCode(authCode)
+	deleteAuthRequest(authReq.ID)
 	// Redirect back to client with authorization code
 	uri := authReq.RedirectURI + "?code=" + url.QueryEscape(code)
 	if authReq.State != "" {
@@ -479,6 +488,12 @@ func setAuthRequest(req *AuthRequest) {
 	AuthReqsCache.MU.Lock()
 	defer AuthReqsCache.MU.Unlock()
 	AuthReqsCache.AuthReqs[req.ID] = req
+}
+
+func deleteAuthRequest(id string) {
+	AuthReqsCache.MU.Lock()
+	defer AuthReqsCache.MU.Unlock()
+	delete(AuthReqsCache.AuthReqs, id)
 }
 
 func setAuthCode(code *AuthCode) {

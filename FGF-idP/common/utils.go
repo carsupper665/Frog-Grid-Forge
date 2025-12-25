@@ -92,6 +92,7 @@ func SendErrorToDc(msg string) error {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("webhook send failed: status %d, body: %s", resp.StatusCode, string(respBody))
 	}
+	SysLog(fmt.Sprintf("Webhook sent: status %d", resp.StatusCode))
 	return nil
 }
 

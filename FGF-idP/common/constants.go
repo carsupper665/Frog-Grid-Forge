@@ -8,7 +8,7 @@ import (
 
 const (
 	Version      = "0.1.0"
-	BuildNocolor = "bata-0.0.1b17"
+	BuildNocolor = "bata-0.0.2b13"
 	Build        = ColorBrightYellow + BuildNocolor + ColorReset
 	SystemName   = "FGF-idP"
 )

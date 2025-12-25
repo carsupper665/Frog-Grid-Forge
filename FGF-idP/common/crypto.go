@@ -65,17 +65,18 @@ func GenerateDeviceIDWithIP(ip string) string {
 	return hex.EncodeToString(id)
 }
 
-func GenerateAccessToken(userID uint, clientID, audience, scope string) (string, error) {
+func GenerateAccessToken(userID uint, clientID, scope string) (string, error) {
 	now := time.Now()
 
+	// kid 未來多對公私鑰匙時會用到
+
 	claims := jwt.MapClaims{
-		"iss":       Issuer,             // 你的 IdP base URL，例如 "https://idp.fgf.local"
-		"sub":       fmt.Sprint(userID), // 使用者 ID（字串）
-		"aud":       audience,           // target API / resource server
-		"client_id": clientID,           // 哪個 client 要的 token
-		"scope":     scope,              // "openid profile ..."
-		"exp":       now.Add(JwtExpireSeconds).Unix(),
-		"iat":       now.Unix(),
+		"iss":   Issuer,             // 你的 IdP base URL，例如 "https://idp.fgf.local"
+		"sub":   fmt.Sprint(userID), // 使用者 ID（字串）
+		"aud":   clientID,           // target API / resource server
+		"scope": scope,              // "openid profile ..."
+		"exp":   now.Add(JwtExpireSeconds).Unix(),
+		"iat":   now.Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)

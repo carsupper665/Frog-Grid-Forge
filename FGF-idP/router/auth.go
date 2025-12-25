@@ -28,6 +28,7 @@ func AuthRouter(router *gin.Engine) {
 	rootRouter.GET("/auth", controller.Auth)
 
 	rootRouter.POST("/login", controller.Login)
+	rootRouter.GET("/verify", controller.EmailVerify)
 	rootRouter.POST("/logout")
 
 	rootRouter.POST("/token", controller.Token)
