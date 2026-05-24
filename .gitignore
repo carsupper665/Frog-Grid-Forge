@@ -1,0 +1,40 @@
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+FGF-idP/logs/
+web-server.*.log
+
+# Databases and local runtime state
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+FGF-idP/DB.db
+FGF-idP/tests/python/.cli_cookies.jar
+
+# Secrets and generated keys
+*.pem
+*.key
+FGF-idP/keys/
+
+# Dependencies
+node_modules/
+web/node_modules/
+
+# Build outputs
+dist/
+build/
+*.exe
+FGF-idP/main.exe
+
+# Tooling and OS files
+__pycache__/
+*.py[cod]
+.DS_Store
+.vscode/
+.idea/
