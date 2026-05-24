@@ -35,8 +35,12 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		fmt.Println("Error loading .env file")
 	}
+
 	common.LoadEnv()
-	common.SetupLogger()
+	common.SetupLogger() // 兼容舊的logger
+	common.InitLogger()
+	logger := common.Logger
+	logger.Debugf("system says, Hi is me, FGF-idP, Version: %s%s, Initializing...", common.Version, common.Build)
 	common.SysLog(fmt.Sprintf("%s, Version: %s%s, Initializing...", common.SystemName, common.Version, common.Build))
 
 	if os.Getenv("DEBUG") != "true" { // gin 預設為 debug 所以要記得關
@@ -54,9 +58,9 @@ func main() {
 	// CustomRecovery 這邊的作用是超大 exception 機制 如果API哪裡繃了可以防程序崩 再以json回傳問題
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		common.SysError(fmt.Sprintf("panic detected: %v", err))
-		err = common.SendErrorToDc(fmt.Sprintf("server name:%s Server Build: %s Panic detected: %v", common.SystemName, common.BuildNocolor, err))
-		if err != nil {
-			common.SysError(fmt.Sprintf("Failed to send error to Discord: %v", err))
+		dcErr := common.SendErrorToDc(fmt.Sprintf("server name:%s Server Build: %s Panic detected: %v", common.SystemName, common.BuildNocolor, err))
+		if dcErr != nil {
+			common.SysError(fmt.Sprintf("Failed to send error to Discord: %v", dcErr))
 		}
 		c.JSON(500, gin.H{
 			"error": gin.H{
@@ -65,8 +69,9 @@ func main() {
 			},
 		})
 	}))
-	server.Use(gin.Recovery())
 	middleware.SetUpLogger(server)
+	middleware.Init()
+	logger.Debug("init middleware complete")
 	router.SetRouter(server)
 	// init session store
 	// store := cookie.NewStore([]byte(common.SessionSecret))

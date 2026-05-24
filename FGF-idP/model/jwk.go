@@ -4,7 +4,6 @@ import (
 	"FGF-idP/common"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	"gorm.io/datatypes"
@@ -132,7 +131,7 @@ func ValiClientWithUrl(clientID, redirectURI string) (bool, string, error) {
 		}
 	}
 	for _, uri := range redirectURIs {
-		if strings.HasPrefix(redirectURI, uri) || redirectURI == uri {
+		if redirectURI == uri {
 			return true, "", nil
 		}
 	}

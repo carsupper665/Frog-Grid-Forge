@@ -75,7 +75,7 @@ func GenerateAccessToken(userID uint, clientID, scope string) (string, error) {
 		"sub":   fmt.Sprint(userID), // 使用者 ID（字串）
 		"aud":   clientID,           // target API / resource server
 		"scope": scope,              // "openid profile ..."
-		"exp":   now.Add(JwtExpireSeconds).Unix(),
+		"exp":   now.Add(JwtExpireSeconds * time.Second).Unix(),
 		"iat":   now.Unix(),
 	}
 
@@ -95,7 +95,7 @@ func GenerateIDToken(userID uint, clientID, nonce string) (string, error) {
 		"iss": Issuer,             // IdP 的 Issuer URL
 		"sub": fmt.Sprint(userID), // 使用者 ID，要是字串
 		"aud": clientID,           // 這顆 ID Token 給哪個 client 用
-		"exp": now.Add(JwtExpireSeconds).Unix(),
+		"exp": now.Add(JwtExpireSeconds * time.Second).Unix(),
 		"iat": now.Unix(),
 		// 可以視需求加 "auth_time": authTime.Unix(),
 	}
@@ -234,15 +234,23 @@ func LoadKey(privPath, pubPath string) (*rsa.PrivateKey, *rsa.PublicKey, error) 
 }
 
 func GetJWTPayload(token string) (map[string]interface{}, error) {
-	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+	// 統一改為 RS256：只接受 RSA public key 驗證
+	if RSAPublicKey == nil {
+		return nil, fmt.Errorf("RSAPublicKey is nil; make sure keys are initialized")
+	}
+
+	parsedToken, err := jwt.Parse(token, func(parsed *jwt.Token) (interface{}, error) {
+		if parsed.Method.Alg() != jwt.SigningMethodRS256.Alg() {
 			return nil, jwt.NewValidationError("unexpected signing method", jwt.ValidationErrorSignatureInvalid)
 		}
-		return []byte(CryptoSecret), nil
+		return RSAPublicKey, nil
 	})
 
-	if err != nil || !parsedToken.Valid {
-		return nil, err // 解析失敗或無效
+	if err != nil {
+		return nil, err
+	}
+	if !parsedToken.Valid {
+		return nil, jwt.NewValidationError("invalid token", jwt.ValidationErrorSignatureInvalid)
 	}
 
 	if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok {

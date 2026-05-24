@@ -117,20 +117,12 @@ func InitDB() error {
 		return err
 	}
 
-	startup := IsInitialized()
-	if startup != nil {
-		var jwkErr error
-		// DB is already initialized
-		common.SysLog("database already initialized at " + startup.InitAt.String() + ", version: " + startup.Version)
-		jwkMetadata, jwkErr = getMetadata()
-		return jwkErr
-	}
-	baseurl := common.GetEnvOrDefaultString("BACKEND_BASE_URL", "http://localhost")
+	baseurl := strings.TrimSuffix(common.GetEnvOrDefaultString("BACKEND_BASE_URL", fmt.Sprintf("http://localhost:%d", common.Port)), "/")
 	endpoint := baseurl + "/x/"
 	metadata := JakMetadata{
 		Sid:                   "FGF-idP",
-		Issuer:                fmt.Sprintf("%s:%s", baseurl, common.Port),
-		JwksURI:               fmt.Sprintf("%s:%s", baseurl, "/well-known/keys"),
+		Issuer:                baseurl,
+		JwksURI:               baseurl + "/.well-known/keys",
 		AuthorizationEndpoint: endpoint + "auth",
 		TokenEndpoint:         endpoint + "token",
 		UserinfoEndpoint:      endpoint + "userinfo",
@@ -143,10 +135,20 @@ func InitDB() error {
 		DeletedAt:             gorm.DeletedAt{},
 	}
 
-	if err := DB.Where("sid = ?", metadata.Sid).First(&JakMetadata{}).Error; err != nil {
-		if err := DB.Create(&metadata).Error; err != nil {
+	startup := IsInitialized()
+	if startup != nil {
+		var jwkErr error
+		// DB is already initialized
+		common.SysLog("database already initialized at " + startup.InitAt.String() + ", version: " + startup.Version)
+		if err := upsertMetadata(metadata); err != nil {
 			return err
 		}
+		jwkMetadata, jwkErr = getMetadata()
+		return jwkErr
+	}
+
+	if err := upsertMetadata(metadata); err != nil {
+		return err
 	}
 
 	jwkMetadata, err = getMetadata()
@@ -164,6 +166,26 @@ func InitDB() error {
 	}
 	err = DB.Create(&initRecord).Error
 	return err
+}
+
+func upsertMetadata(metadata JakMetadata) error {
+	var existing JakMetadata
+	err := DB.Where("sid = ?", metadata.Sid).First(&existing).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return DB.Create(&metadata).Error
+	}
+	if err != nil {
+		return err
+	}
+
+	return DB.Model(&existing).Updates(map[string]any{
+		"issuer":                 metadata.Issuer,
+		"jwks_uri":               metadata.JwksURI,
+		"authorization_endpoint": metadata.AuthorizationEndpoint,
+		"token_endpoint":         metadata.TokenEndpoint,
+		"userinfo_endpoint":      metadata.UserinfoEndpoint,
+		"end_session_endpoint":   metadata.EndSessionEndpoint,
+	}).Error
 }
 
 func initKeys() error {

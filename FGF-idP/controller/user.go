@@ -2,6 +2,7 @@ package controller
 
 import (
 	"FGF-idP/common"
+	"FGF-idP/middleware"
 	"FGF-idP/model"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt"
 )
 
 var loginUrl = "/x/login?req_id="
@@ -82,6 +84,45 @@ func InitAuthCache() {
 	AuthReqsCache = &ReqCache{
 		AuthReqs: make(map[string]*AuthRequest),
 	}
+}
+
+func Logout(c *gin.Context) {
+	token := c.GetHeader("Authorization")
+	if token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_token"})
+		return
+	}
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+	payload, err := common.GetJWTPayload(token)
+
+	if err != nil {
+		if err.(*jwt.ValidationError).Errors&jwt.ValidationErrorExpired != 0 {
+			c.JSON(http.StatusOK, gin.H{"message": "Already logged out"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_token"})
+		return
+	}
+	expRaw, ok := payload["exp"]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_exp"})
+		return
+	}
+	// 可能有問題
+	expFloat, ok := expRaw.(float64)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_exp_type"})
+		return
+	}
+
+	exp := int64(expFloat) // seconds since epoch
+
+	middleware.TokenStore.Mark(token, time.Duration(exp))
+	c.JSON(http.StatusOK, gin.H{"message": "logged_out"})
+
+	return
 }
 
 // Login [user input] -> [Auth Req check] -> [Validate creds] -> [Issue Auth Code + Redirect]
@@ -321,15 +362,6 @@ func Auth(c *gin.Context) {
 	codeChallengeMethod := c.Query("code_challenge_method")
 
 	// URI Not validated here, will return error to client if invalid
-	if responseType != "code" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_response_type"})
-		return
-	}
-	if !strings.Contains(scope, "openid") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_scope"})
-		return
-	}
-
 	if isValid, msg, err := model.ValiClientWithUrl(clientID, redirectURI); !isValid || err != nil {
 		common.LogError(c.Request.Context(), "Auth client validation error message: "+msg)
 		if err != nil {
@@ -337,6 +369,15 @@ func Auth(c *gin.Context) {
 		} else {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 		}
+		return
+	}
+
+	if responseType != "code" {
+		redirectWithAuthError(c, redirectURI, "unsupported_response_type", state)
+		return
+	}
+	if !strings.Contains(scope, "openid") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_scope"})
 		return
 	}
 
@@ -363,6 +404,21 @@ func Auth(c *gin.Context) {
 
 	// Redirect back to client with authorization code
 	issueCodeAndRedirect(c, authReq, idUint)
+}
+
+func redirectWithAuthError(c *gin.Context, redirectURI, errorCode, state string) {
+	parsed, err := url.Parse(redirectURI)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+		return
+	}
+	query := parsed.Query()
+	query.Set("error", errorCode)
+	if state != "" {
+		query.Set("state", state)
+	}
+	parsed.RawQuery = query.Encode()
+	c.Redirect(http.StatusFound, parsed.String())
 }
 
 func Token(c *gin.Context) {
@@ -411,6 +467,34 @@ func Token(c *gin.Context) {
 		"expires_in":    common.JwtExpireSeconds,
 	})
 
+}
+
+func UserInfo(c *gin.Context) {
+	authHeader := c.GetHeader("Authorization")
+	parts := strings.Fields(authHeader)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		unauthorizedUserInfo(c)
+		return
+	}
+
+	payload, err := common.GetJWTPayload(parts[1])
+	if err != nil {
+		unauthorizedUserInfo(c)
+		return
+	}
+
+	sub, ok := payload["sub"].(string)
+	if !ok || sub == "" {
+		unauthorizedUserInfo(c)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sub": sub})
+}
+
+func unauthorizedUserInfo(c *gin.Context) {
+	c.Header("WWW-Authenticate", `Bearer realm="FGF-idP"`)
+	c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
 }
 
 func verifyAuthCodeInternal(code, clientID, redirectURI, codeVerifier string) (*AuthCode, error) {
@@ -562,4 +646,8 @@ func getPayloadAndId(c *gin.Context) (map[string]interface{}, string, uint, erro
 		return nil, "", 0, fmt.Errorf("failed to parse user ID: %w", parseErr)
 	}
 	return payload, rawUID.(string), uint(uid), nil
+}
+
+func LoginHTML(c *gin.Context) {
+	// return a index.html
 }

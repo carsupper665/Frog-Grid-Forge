@@ -4,6 +4,7 @@ package common
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ var (
 	BatchUpdateInterval int
 	BatchUpdateEnabled  = false
 	RelayTimeout        int
+	Logger              *SysLogger
 )
 
 var (
@@ -32,6 +34,15 @@ var (
 	MaxOpenConns = 100
 	Lifetime     = 60 // in minutes
 )
+
+func InitLogger() {
+	logger, err := NewSysLogger("FGF-idP", nil, 8000)
+	if err != nil {
+		fmt.Println("InitLogger err:", err)
+		os.Exit(0)
+	}
+	Logger = logger
+}
 
 func LoadEnv() {
 
