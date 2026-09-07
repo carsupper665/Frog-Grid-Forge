@@ -19,6 +19,14 @@ const (
 	JwtExpireSeconds = 24 * 60 * 60 * 7
 )
 
+var (
+	AccessTokenExpireSeconds   = JwtExpireSeconds
+	SessionCookieExpireSeconds = 30 * 24 * 60 * 60
+	DeviceCookieExpireSeconds  = 360 * 24 * 60 * 60
+	CookieSecure               = false
+	ActiveKeyID                = InitialKeyKID
+)
+
 const (
 	RequestIdKey = "FGF-Request-Id"
 )

@@ -92,6 +92,21 @@ func IsDeviceExists(deviceID string) (bool, error) {
 	return count > 0, nil
 }
 
+func IsTrustedDevice(userID uint, deviceID string) (bool, error) {
+	if deviceID == "" {
+		return false, nil
+	}
+	var count int64
+	err := DB.Model(&UserDevice{}).
+		Where("id = ? AND user_id = ?", deviceID, userID).
+		Count(&count).
+		Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func SaveDevice(deviceID, userAgent, ip string, userID uint) error {
 	device := UserDevice{
 		ID:        deviceID,

@@ -17,7 +17,7 @@ import (
 	"github.com/golang-jwt/jwt"
 )
 
-var loginUrl = "/x/login?req_id="
+const loginReasonDeviceVerificationRequired = "device_verification_required"
 
 type loginReq struct {
 	Email    string `json:"email" binding:"omitempty,email"`
@@ -46,6 +46,7 @@ type AuthRequest struct {
 	CodeChallengeMethod string
 	UserID              *uint   // 還沒登入時為 nil
 	EmailVerifyToken    *string // Email verification token for new device login
+	EmailVerifyDeviceID *string // Device cookie bound to EmailVerifyToken
 }
 
 type AuthCode struct {
@@ -86,19 +87,130 @@ func InitAuthCache() {
 	}
 }
 
+func loginRedirectURL(reqID, reason string) string {
+	frontendBase := strings.TrimSuffix(common.GetEnvOrDefaultString("FRONTEND_BASE_URL", "http://localhost:3000"), "/")
+	route := common.GetEnvOrDefaultString("FRONTEND_LOGIN_ROUTE", "/login")
+	if route == "" {
+		route = "/login"
+	}
+	loginURL := route
+	if parsedRoute, err := url.Parse(route); err != nil || !parsedRoute.IsAbs() {
+		if !strings.HasPrefix(route, "/") {
+			route = "/" + route
+		}
+		loginURL = frontendBase + route
+	}
+	parsed, err := url.Parse(loginURL)
+	if err != nil {
+		parsed, _ = url.Parse(frontendBase + "/login")
+	}
+	query := parsed.Query()
+	if reqID != "" {
+		query.Set("req_id", reqID)
+	}
+	if reason != "" {
+		query.Set("reason", reason)
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func redirectToLogin(c *gin.Context, authReq *AuthRequest, reason string) {
+	setAuthRequest(authReq)
+	c.Redirect(http.StatusFound, loginRedirectURL(authReq.ID, reason))
+}
+
+func setCookie(c *gin.Context, name, value string, maxAge int) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   common.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func issueSessionCookie(c *gin.Context, user model.User) error {
+	token, err := common.GenerateSessionToken(user.ID, user.Username)
+	if err != nil {
+		return err
+	}
+	setCookie(c, common.JwtCookieName, token, common.SessionCookieExpireSeconds)
+	return nil
+}
+
+func clearSessionCookie(c *gin.Context) {
+	setCookie(c, common.JwtCookieName, "", -1)
+}
+
+func validateSessionPayload(payload map[string]interface{}) (uint, string, error) {
+	if payload["typ"] != "session" {
+		return 0, "", fmt.Errorf("invalid session type")
+	}
+	username, ok := payload["username"].(string)
+	if !ok || username == "" {
+		return 0, "", fmt.Errorf("missing username")
+	}
+	rawUID, ok := payload["user_id"].(string)
+	if !ok || rawUID == "" {
+		return 0, "", fmt.Errorf("missing user_id")
+	}
+	uid, err := strconv.ParseUint(rawUID, 10, 32)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid user_id: %w", err)
+	}
+	return uint(uid), username, nil
+}
+
+func scopeIncludes(scope, required string) bool {
+	for _, item := range strings.Fields(scope) {
+		if item == required {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidOIDCScope(scope string) bool {
+	fields := strings.Fields(scope)
+	if len(fields) == 0 {
+		return false
+	}
+	hasOpenID := false
+	for _, item := range fields {
+		switch item {
+		case "openid":
+			hasOpenID = true
+		case "profile", "email":
+		default:
+			return false
+		}
+	}
+	return hasOpenID
+}
+
 func Logout(c *gin.Context) {
 	token := c.GetHeader("Authorization")
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+	if token == "" {
+		if cookieToken, err := c.Cookie(common.JwtCookieName); err == nil {
+			token = cookieToken
+		}
+	}
 	if token == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_token"})
 		return
 	}
-	if strings.HasPrefix(token, "Bearer ") {
-		token = strings.TrimPrefix(token, "Bearer ")
-	}
 	payload, err := common.GetJWTPayload(token)
 
 	if err != nil {
-		if err.(*jwt.ValidationError).Errors&jwt.ValidationErrorExpired != 0 {
+		var validationErr *jwt.ValidationError
+		if errors.As(err, &validationErr) && validationErr.Errors&jwt.ValidationErrorExpired != 0 {
+			clearSessionCookie(c)
 			c.JSON(http.StatusOK, gin.H{"message": "Already logged out"})
 			return
 		}
@@ -119,7 +231,14 @@ func Logout(c *gin.Context) {
 
 	exp := int64(expFloat) // seconds since epoch
 
-	middleware.TokenStore.Mark(token, time.Duration(exp))
+	ttl := time.Until(time.Unix(exp, 0))
+	if ttl < 0 {
+		ttl = 0
+	}
+	if middleware.TokenStore != nil {
+		middleware.TokenStore.Mark(token, ttl)
+	}
+	clearSessionCookie(c)
 	c.JSON(http.StatusOK, gin.H{"message": "logged_out"})
 
 	return
@@ -137,6 +256,10 @@ func Login(c *gin.Context) {
 
 	if req.ReqID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing_req_id"})
+		return
+	}
+	if (req.Email == "" && req.Username == "") || (req.Email != "" && req.Username != "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
 		return
 	}
 
@@ -165,7 +288,12 @@ func Login(c *gin.Context) {
 	password := req.Password + user.Salt
 	valid := common.ValidatePasswordAndHash(password, user.Password)
 	if !valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "wrong_password"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_credentials"})
+		return
+	}
+	if err := issueSessionCookie(c, user); err != nil {
+		common.LogError(c.Request.Context(), "issue session cookie error: "+err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 		return
 	}
 
@@ -173,11 +301,14 @@ func Login(c *gin.Context) {
 	dId, dIdErr := c.Cookie(common.DeviceCookieName)
 	if dIdErr != nil {
 		if errors.Is(dIdErr, http.ErrNoCookie) {
-			userStr := strconv.FormatUint(uint64(user.ID), 10)
-			dId = common.GetRandomString(16) + userStr
-			c.SetCookie(common.DeviceCookieName, dId, 360*24*60*60, "/", "", false, true)
-			CreateVerificationToken(c, user, authReq.ID)
-			c.JSON(203, gin.H{"message": "new_device_detected, Varify code sent to email", "email": user.Email})
+			dId = common.GetRandomString(32)
+			setCookie(c, common.DeviceCookieName, dId, common.DeviceCookieExpireSeconds)
+			if err := CreateVerificationToken(c, user, authReq.ID, dId); err != nil {
+				common.LogError(c.Request.Context(), "CreateVerificationToken error: "+err.Error())
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+				return
+			}
+			c.JSON(203, gin.H{"message": "new_device_detected, verify code sent to email", "email": user.Email})
 			return
 		}
 		common.LogError(c.Request.Context(), "Device cookie error: "+dIdErr.Error())
@@ -186,35 +317,54 @@ func Login(c *gin.Context) {
 
 	}
 
-	isExist, err := model.IsDeviceExists(dId)
-	if err != nil || !isExist {
-		if err != nil { // Just in case err is not nil
-			common.LogError(c.Request.Context(), fmt.Sprintf("Device existence check error: %v", err))
+	isTrusted, err := model.IsTrustedDevice(user.ID, dId)
+	if err != nil {
+		common.LogError(c.Request.Context(), fmt.Sprintf("Device trust check error: %v", err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		return
+	}
+	if !isTrusted {
+		if err := CreateVerificationToken(c, user, authReq.ID, dId); err != nil {
+			common.LogError(c.Request.Context(), "CreateVerificationToken error: "+err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+			return
 		}
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized_device"})
+		c.JSON(203, gin.H{"message": "device_verification_required, verify code sent to email", "email": user.Email})
 		return
 	}
 	issueCodeAndRedirect(c, authReq, user.ID)
 
 }
 
-func CreateVerificationToken(c *gin.Context, user model.User, reqId string) {
+func CreateVerificationToken(c *gin.Context, user model.User, reqId, deviceID string) error {
 	common.LogDebug(c.Request.Context(), "CreateVerificationCode called for user: "+user.Username)
 	emailToken, err := common.GenEmailSignedToken(user.Email)
 	if err != nil {
 		common.LogError(c.Request.Context(), "GenEmailSignedToken error: "+err.Error())
-		return
+		return err
 	}
 	err = model.SetVerificationCode(user.ID, emailToken)
 	if err != nil {
 		if errors.Is(err, model.ErrCodeAlreadySet) {
-			return
+			if clearErr := model.ClearVerificationCode(user.Email); clearErr != nil {
+				return clearErr
+			}
+			if setErr := model.SetVerificationCode(user.ID, emailToken); setErr != nil {
+				return setErr
+			}
+		} else {
+			common.LogError(c.Request.Context(), "SetVerificationCode error: "+err.Error())
+			return err
 		}
-		common.LogError(c.Request.Context(), "SetVerificationCode error: "+err.Error())
-		return
+	}
+	if err := setAuthEmailToken(reqId, emailToken, deviceID); err != nil {
+		common.LogError(c.Request.Context(), "setAuthEmailToken error: "+err.Error())
+		_ = model.ClearVerificationCode(user.Email)
+		return err
 	}
 
-	verifyUrl := common.GetEnvOrDefaultString("FRONTEND_BASE_URL", "http://localhost:3000/") + "/x/verify?t=" + url.QueryEscape(emailToken)
+	backendBase := strings.TrimSuffix(common.GetEnvOrDefaultString("BACKEND_BASE_URL", fmt.Sprintf("http://localhost:%d", common.Port)), "/")
+	verifyUrl := backendBase + "/x/verify?t=" + url.QueryEscape(emailToken)
 
 	htmlMsg := fmt.Sprintf(
 		`<!DOCTYPE html>
@@ -272,6 +422,10 @@ func CreateVerificationToken(c *gin.Context, user model.User, reqId string) {
 	if email == "" || email == "null" {
 		common.LogError(c.Request.Context(), "User email is empty for user: "+user.Username)
 	}
+	if common.SMTPServer == "" && common.SMTPAccount == "" {
+		common.LogDebug(c.Request.Context(), "SMTP not configured; verification token stored but email send skipped")
+		return nil
+	}
 
 	common.LogDebug(c.Request.Context(), "Sending verification code to user: "+user.Username+" Email: "+email)
 
@@ -285,15 +439,10 @@ func CreateVerificationToken(c *gin.Context, user model.User, reqId string) {
 		common.LogError(c.Request.Context(), "SendEmail error: "+err.Error()+" SMTP account: "+common.SMTPAccount)
 		common.LogError(c.Request.Context(), "Failed to send verification code to user: "+user.Username)
 		_ = model.ClearVerificationCode(user.Email) // sent failed, clear the code
-		return
+		_ = clearAuthEmailToken(reqId)
+		return err
 	}
-
-	err = setAuthEmailToken(reqId, emailToken)
-	if err != nil {
-		common.LogError(c.Request.Context(), "setAuthEmailToken error: "+err.Error())
-		_ = model.ClearVerificationCode(user.Email) // sent failed, clear the code
-		return
-	}
+	return nil
 }
 
 func EmailVerify(c *gin.Context) {
@@ -311,18 +460,26 @@ func EmailVerify(c *gin.Context) {
 
 	payload, err := common.VerifySignedToken(token)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid"})
+		if strings.Contains(err.Error(), "expired") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "expired_token"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_token"})
 		return
 	}
 	user, err := model.GetUserByEmail(payload.UserEmail)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_token"})
 		return
 	}
 	authReq, exist := getAuthReqByToken(token)
 
 	if !exist {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_req_id"})
+		return
+	}
+	if authReq.EmailVerifyDeviceID == nil || *authReq.EmailVerifyDeviceID != deviceId {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_device"})
 		return
 	}
 	err = model.ClearVerificationCode(user.Email)
@@ -342,6 +499,11 @@ func EmailVerify(c *gin.Context) {
 	if err != nil {
 		common.LogError(c.Request.Context(), "SaveDevice error: "+err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "DB error saving device"})
+		return
+	}
+	if err := issueSessionCookie(c, user); err != nil {
+		common.LogError(c.Request.Context(), "issue session cookie error: "+err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 		return
 	}
 
@@ -376,8 +538,8 @@ func Auth(c *gin.Context) {
 		redirectWithAuthError(c, redirectURI, "unsupported_response_type", state)
 		return
 	}
-	if !strings.Contains(scope, "openid") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_scope"})
+	if !isValidOIDCScope(scope) {
+		redirectWithAuthError(c, redirectURI, "invalid_scope", state)
 		return
 	}
 
@@ -395,10 +557,28 @@ func Auth(c *gin.Context) {
 
 	payload, _, idUint, err := getPayloadAndId(c)
 	if payload == nil || err != nil {
-		// JWT 無效，導向登入頁面
-		uri := loginUrl + url.QueryEscape(authReq.ID)
-		setAuthRequest(authReq) // save to cache
-		c.Redirect(http.StatusFound, uri)
+		redirectToLogin(c, authReq, "")
+		return
+	}
+
+	deviceID, err := c.Cookie(common.DeviceCookieName)
+	if err != nil {
+		if errors.Is(err, http.ErrNoCookie) {
+			redirectToLogin(c, authReq, loginReasonDeviceVerificationRequired)
+			return
+		}
+		common.LogError(c.Request.Context(), "Device cookie error: "+err.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cookie_error"})
+		return
+	}
+	isTrusted, err := model.IsTrustedDevice(idUint, deviceID)
+	if err != nil {
+		common.LogError(c.Request.Context(), "Device trust check error: "+err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		return
+	}
+	if !isTrusted {
+		redirectToLogin(c, authReq, loginReasonDeviceVerificationRequired)
 		return
 	}
 
@@ -460,11 +640,11 @@ func Token(c *gin.Context) {
 	}
 	// TODO refresh token
 	c.JSON(http.StatusOK, gin.H{
-		"access_token":  accessToken,
-		"id_token":      idToken,
-		"refresh_token": nil,
-		"token_type":    "Bearer",
-		"expires_in":    common.JwtExpireSeconds,
+		"access_token": accessToken,
+		"id_token":     idToken,
+		"token_type":   "Bearer",
+		"expires_in":   common.AccessTokenExpireSeconds,
+		"scope":        authCode.Scope,
 	})
 
 }
@@ -482,18 +662,56 @@ func UserInfo(c *gin.Context) {
 		unauthorizedUserInfo(c)
 		return
 	}
+	if payload["typ"] != "access" {
+		unauthorizedUserInfo(c)
+		return
+	}
+	aud, ok := payload["aud"].(string)
+	if !ok || aud == "" {
+		unauthorizedUserInfo(c)
+		return
+	}
+	clientExists, err := model.ClientExists(aud)
+	if err != nil || !clientExists {
+		unauthorizedUserInfo(c)
+		return
+	}
+	scope, ok := payload["scope"].(string)
+	if !ok || !scopeIncludes(scope, "openid") {
+		unauthorizedUserInfo(c)
+		return
+	}
 
 	sub, ok := payload["sub"].(string)
 	if !ok || sub == "" {
 		unauthorizedUserInfo(c)
 		return
 	}
+	uid, err := strconv.ParseUint(sub, 10, 32)
+	if err != nil {
+		unauthorizedUserInfo(c)
+		return
+	}
+	user, err := model.GetUserByID(uint(uid))
+	if err != nil {
+		unauthorizedUserInfo(c)
+		return
+	}
+	name := user.DisplayName
+	if name == "" {
+		name = user.Username
+	}
 
-	c.JSON(http.StatusOK, gin.H{"sub": sub})
+	c.JSON(http.StatusOK, gin.H{
+		"sub":                sub,
+		"email":              user.Email,
+		"name":               name,
+		"preferred_username": user.Username,
+	})
 }
 
 func unauthorizedUserInfo(c *gin.Context) {
-	c.Header("WWW-Authenticate", `Bearer realm="FGF-idP"`)
+	c.Header("WWW-Authenticate", `Bearer error="invalid_token"`)
 	c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
 }
 
@@ -561,11 +779,18 @@ func issueCodeAndRedirect(c *gin.Context, authReq *AuthRequest, userId uint) {
 	setAuthCode(authCode)
 	deleteAuthRequest(authReq.ID)
 	// Redirect back to client with authorization code
-	uri := authReq.RedirectURI + "?code=" + url.QueryEscape(code)
-	if authReq.State != "" {
-		uri += "&state=" + url.QueryEscape(authReq.State)
+	parsed, err := url.Parse(authReq.RedirectURI)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_request"})
+		return
 	}
-	c.Redirect(http.StatusFound, uri)
+	query := parsed.Query()
+	query.Set("code", code)
+	if authReq.State != "" {
+		query.Set("state", authReq.State)
+	}
+	parsed.RawQuery = query.Encode()
+	c.Redirect(http.StatusFound, parsed.String())
 }
 
 func setAuthRequest(req *AuthRequest) {
@@ -593,7 +818,7 @@ func getAuthRequest(id string) (*AuthRequest, bool) {
 	return req, exist
 }
 
-func setAuthEmailToken(id string, emailToken string) (err error) {
+func setAuthEmailToken(id string, emailToken string, deviceID string) (err error) {
 	AuthReqsCache.MU.Lock()
 	defer AuthReqsCache.MU.Unlock()
 	req, exist := AuthReqsCache.AuthReqs[id]
@@ -601,6 +826,20 @@ func setAuthEmailToken(id string, emailToken string) (err error) {
 		return fmt.Errorf("auth request not found")
 	}
 	req.EmailVerifyToken = &emailToken
+	req.EmailVerifyDeviceID = &deviceID
+	AuthReqsCache.AuthReqs[id] = req
+	return nil
+}
+
+func clearAuthEmailToken(id string) error {
+	AuthReqsCache.MU.Lock()
+	defer AuthReqsCache.MU.Unlock()
+	req, exist := AuthReqsCache.AuthReqs[id]
+	if !exist {
+		return fmt.Errorf("auth request not found")
+	}
+	req.EmailVerifyToken = nil
+	req.EmailVerifyDeviceID = nil
 	AuthReqsCache.AuthReqs[id] = req
 	return nil
 }
@@ -638,16 +877,14 @@ func getPayloadAndId(c *gin.Context) (map[string]interface{}, string, uint, erro
 		return nil, "", 0, fmt.Errorf("invalid token: %w", err)
 	}
 
-	rawUID, _ := payload["user_id"]
-	uid, parseErr := strconv.ParseUint(rawUID.(string), 10, 32)
-
-	if parseErr != nil {
-		common.LogDebug(c.Request.Context(), "Parsing user id error: "+parseErr.Error())
-		return nil, "", 0, fmt.Errorf("failed to parse user ID: %w", parseErr)
+	uid, _, err := validateSessionPayload(payload)
+	if err != nil {
+		common.LogDebug(c.Request.Context(), "Session payload validation error: "+err.Error())
+		return nil, "", 0, err
 	}
-	return payload, rawUID.(string), uint(uid), nil
+	return payload, strconv.FormatUint(uint64(uid), 10), uid, nil
 }
 
 func LoginHTML(c *gin.Context) {
-	// return a index.html
+	c.Redirect(http.StatusFound, loginRedirectURL(c.Query("req_id"), c.Query("reason")))
 }

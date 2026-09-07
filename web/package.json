@@ -1,0 +1,12 @@
+{
+  "name": "fgf-oidc-login-tester",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zero-build OIDC login flow tester with local proxy.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

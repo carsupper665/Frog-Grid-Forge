@@ -87,10 +87,28 @@ func GetActiveKeys() ([]JwkKey, error) {
 	return keys, err
 }
 
+func GetActiveSigningKey() (*JwkKey, error) {
+	var key JwkKey
+	err := DB.
+		Where("sid = ? AND is_active = ?", common.SystemName, true).
+		Order("id DESC").
+		First(&key).Error
+	if err != nil {
+		return nil, err
+	}
+	return &key, nil
+}
+
+func ClientExists(clientID string) (bool, error) {
+	var count int64
+	err := DB.Model(&Client{}).Where("client_id = ?", clientID).Count(&count).Error
+	return count > 0, err
+}
+
 func GetKeyBySid(sid string) ([]JwkKey, error) {
 	var keys []JwkKey
 	err := DB.
-		Where("service_id = ? AND is_active = ?", sid, true).
+		Where("sid = ? AND is_active = ?", sid, true).
 		Find(&keys).Error
 	return keys, err
 }

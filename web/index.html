@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OIDC Login Flow Tester</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <header class="hero">
+        <p class="eyebrow">FGF-idP QA Console</p>
+        <h1>OIDC 登入流程測試頁</h1>
+        <p class="subtitle">
+          覆蓋流程：<code>/x/auth</code> -> <code>/x/login</code> ->
+          <code>/x/verify</code>(可選) -> <code>/x/token</code>
+        </p>
+      </header>
+
+      <section class="card">
+        <h2>環境與 Client 設定</h2>
+        <div class="grid two">
+          <label>
+            Backend Origin
+            <input id="backend-origin" value="http://localhost:15515" />
+          </label>
+          <label>
+            Client ID
+            <input id="client-id" value="fgf-mc-panel" />
+          </label>
+          <label>
+            Client Secret
+            <input id="client-secret" type="password" />
+          </label>
+          <label>
+            Redirect URI
+            <input id="redirect-uri" value="http://localhost:3000/callback" />
+          </label>
+          <label>
+            Scope
+            <input id="scope" value="openid profile email" />
+          </label>
+          <label>
+            State
+            <input id="state" value="state-demo-001" />
+          </label>
+          <label>
+            Nonce
+            <input id="nonce" value="nonce-demo-001" />
+          </label>
+          <label>
+            Code Verifier (PKCE 可選)
+            <input id="code-verifier" />
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>使用者登入資料</h2>
+        <div class="grid two">
+          <label>
+            Username
+            <input id="username" placeholder="username 或 email 擇一" />
+          </label>
+          <label>
+            Email
+            <input id="email" type="email" placeholder="username 或 email 擇一" />
+          </label>
+          <label>
+            Password
+            <input id="password" type="password" />
+          </label>
+          <label>
+            Req ID
+            <input id="req-id" />
+          </label>
+          <label>
+            Verify Token (`t`)
+            <input id="verify-token" placeholder="可貼完整 verify URL" />
+          </label>
+          <label>
+            Auth Code
+            <input id="auth-code" />
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>流程操作</h2>
+        <div class="actions">
+          <button id="btn-fill-default">Fill Defaults</button>
+          <button id="btn-auth">Step A: Start Auth</button>
+          <button id="btn-login">Step B: Login</button>
+          <button id="btn-verify">Step C: Verify</button>
+          <button id="btn-token">Step D: Token</button>
+        </div>
+        <p id="flow-status" class="status">尚未執行</p>
+      </section>
+
+      <section class="card">
+        <h2>Cookie 工具（did）</h2>
+        <div class="grid two">
+          <label>
+            did cookie value
+            <input id="did-cookie-value" placeholder="可手動設置既有 did 模擬舊裝置" />
+          </label>
+          <label>
+            伺服器端觀察到的 did
+            <input id="did-cookie-server" readonly />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="btn-cookie-sync">Sync did</button>
+          <button id="btn-cookie-set">Set did</button>
+          <button id="btn-cookie-clear">Clear did</button>
+        </div>
+        <p id="cookie-status" class="status secondary">尚未同步</p>
+      </section>
+
+      <section class="card">
+        <h2>診斷輸出</h2>
+        <div class="actions">
+          <button id="btn-clear-log">Clear Log</button>
+        </div>
+        <pre id="log"></pre>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

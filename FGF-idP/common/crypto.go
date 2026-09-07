@@ -22,7 +22,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var Issuer = GetEnvOrDefaultString("FRONTEND_BASE_URL", "http://127.0.0.1:3000")
+var Issuer = GetEnvOrDefaultString("BACKEND_BASE_URL", "http://127.0.0.1:3000")
 var ErrKeyNotFound = errors.New("signing key not found")
 
 func GenerateHMACWithKey(key []byte, data string) string {
@@ -68,20 +68,39 @@ func GenerateDeviceIDWithIP(ip string) string {
 func GenerateAccessToken(userID uint, clientID, scope string) (string, error) {
 	now := time.Now()
 
-	// kid 未來多對公私鑰匙時會用到
-
 	claims := jwt.MapClaims{
 		"iss":   Issuer,             // 你的 IdP base URL，例如 "https://idp.fgf.local"
 		"sub":   fmt.Sprint(userID), // 使用者 ID（字串）
 		"aud":   clientID,           // target API / resource server
-		"scope": scope,              // "openid profile ..."
-		"exp":   now.Add(JwtExpireSeconds * time.Second).Unix(),
+		"typ":   "access",
+		"scope": scope, // "openid profile ..."
+		"exp":   now.Add(time.Duration(AccessTokenExpireSeconds) * time.Second).Unix(),
 		"iat":   now.Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = ActiveKeyID
 	signed, err := token.SignedString(RSAPrivateKey) // 注意這裡要的是 *rsa.PrivateKey 物件，不是 PEM 字串
 	return signed, err
+}
+
+func GenerateSessionToken(userID uint, username string) (string, error) {
+	if RSAPrivateKey == nil {
+		return "", fmt.Errorf("RSAPrivateKey is nil; make sure keys are initialized")
+	}
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"iss":      Issuer,
+		"sub":      fmt.Sprint(userID),
+		"user_id":  fmt.Sprint(userID),
+		"username": username,
+		"typ":      "session",
+		"exp":      now.Add(time.Duration(SessionCookieExpireSeconds) * time.Second).Unix(),
+		"iat":      now.Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = ActiveKeyID
+	return token.SignedString(RSAPrivateKey)
 }
 
 func GenerateIDToken(userID uint, clientID, nonce string) (string, error) {
@@ -95,7 +114,8 @@ func GenerateIDToken(userID uint, clientID, nonce string) (string, error) {
 		"iss": Issuer,             // IdP 的 Issuer URL
 		"sub": fmt.Sprint(userID), // 使用者 ID，要是字串
 		"aud": clientID,           // 這顆 ID Token 給哪個 client 用
-		"exp": now.Add(JwtExpireSeconds * time.Second).Unix(),
+		"typ": "id",
+		"exp": now.Add(time.Duration(AccessTokenExpireSeconds) * time.Second).Unix(),
 		"iat": now.Unix(),
 		// 可以視需求加 "auth_time": authTime.Unix(),
 	}
@@ -106,6 +126,7 @@ func GenerateIDToken(userID uint, clientID, nonce string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = ActiveKeyID
 
 	signed, err := token.SignedString(RSAPrivateKey)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -90,6 +91,12 @@ func LoadEnv() {
 	MemoryCacheEnabled = os.Getenv("MEMORY_CACHE_ENABLED") == "true"
 	UaFilter = os.Getenv("UA_FILTER") == "true"
 	Port = GetEnvOrDefault("PORT", 3000)
+	backendBaseURL := strings.TrimSuffix(GetEnvOrDefaultString("BACKEND_BASE_URL", fmt.Sprintf("http://localhost:%d", Port)), "/")
+	Issuer = backendBaseURL
+	AccessTokenExpireSeconds = GetEnvOrDefault("ACCESS_TOKEN_TTL_SECONDS", JwtExpireSeconds)
+	SessionCookieExpireSeconds = GetEnvOrDefault("SESSION_COOKIE_TTL_SECONDS", 30*24*60*60)
+	DeviceCookieExpireSeconds = GetEnvOrDefault("DEVICE_COOKIE_TTL_SECONDS", 360*24*60*60)
+	CookieSecure = GetEnvOrDefaultBool("COOKIE_SECURE", strings.HasPrefix(backendBaseURL, "https://"))
 
 	// Initialize variables with GetEnvOrDefault
 	SyncFrequency = GetEnvOrDefault("SYNC_FREQUENCY", 60)

@@ -4,6 +4,9 @@ package model
 
 import (
 	"FGF-idP/common"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -144,7 +147,13 @@ func InitDB() error {
 			return err
 		}
 		jwkMetadata, jwkErr = getMetadata()
-		return jwkErr
+		if jwkErr != nil {
+			return jwkErr
+		}
+		if err := initKeys(); err != nil {
+			return err
+		}
+		return ensureDefaultClient()
 	}
 
 	if err := upsertMetadata(metadata); err != nil {
@@ -157,6 +166,9 @@ func InitDB() error {
 	}
 
 	if err := initKeys(); err != nil {
+		return err
+	}
+	if err := ensureDefaultClient(); err != nil {
 		return err
 	}
 
@@ -218,30 +230,125 @@ func isKeyExists() error {
 		if err != nil {
 			return err
 		}
-		pubB64n := common.RsaToBase64urlInt(pubPem.N)
-		pubB64e := common.RsaToBase64urlUint(pubPem.E)
-		// Save to DB
-		if err := DB.Create(&JwkKey{
-			Sid:         common.SystemName,
-			Kid:         common.InitialKeyKID,
-			Kty:         "RSA",
-			Use:         "sig",
-			Alg:         "RS256",
-			N:           pubB64n,
-			E:           pubB64e,
-			IsActive:    true,
-			NotBefore:   nil,
-			ExpiresAt:   nil,
-			Description: "Initial key generated on setup",
-		}).Error; err != nil {
-			return err
-		}
 
+	}
+	if err := ensureActiveJWK(pubPem); err != nil {
+		return err
 	}
 	common.SysLog("database key loaded")
 	common.RSAPrivateKey = privPem
 	common.RSAPublicKey = pubPem
 	return nil
+}
+
+func ensureActiveJWK(pub *rsa.PublicKey) error {
+	pubB64n := common.RsaToBase64urlInt(pub.N)
+	pubB64e := common.RsaToBase64urlUint(pub.E)
+
+	var matchingActive JwkKey
+	if err := DB.Where("sid = ? AND n = ? AND e = ? AND is_active = ?", common.SystemName, pubB64n, pubB64e, true).
+		Order("id DESC").
+		First(&matchingActive).Error; err == nil {
+		common.ActiveKeyID = matchingActive.Kid
+		return nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	key, err := GetActiveSigningKey()
+	if err == nil {
+		if key.N == pubB64n && key.E == pubB64e {
+			common.ActiveKeyID = key.Kid
+			return nil
+		}
+
+		var matching JwkKey
+		if matchErr := DB.Where("sid = ? AND n = ? AND e = ?", common.SystemName, pubB64n, pubB64e).
+			Order("id DESC").
+			First(&matching).Error; matchErr == nil {
+			if !matching.IsActive {
+				if updateErr := DB.Model(&matching).Update("is_active", true).Error; updateErr != nil {
+					return updateErr
+				}
+			}
+			common.ActiveKeyID = matching.Kid
+			return nil
+		} else if !errors.Is(matchErr, gorm.ErrRecordNotFound) {
+			return matchErr
+		}
+
+		kid := derivedJWKID(pubB64n, pubB64e)
+		if err := DB.Create(newJWKKey(kid, pubB64n, pubB64e, "Key activated for loaded public key")).Error; err != nil {
+			return err
+		}
+		common.ActiveKeyID = kid
+		return nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if err := DB.Create(newJWKKey(common.InitialKeyKID, pubB64n, pubB64e, "Initial key generated on setup")).Error; err != nil {
+		return err
+	}
+	common.ActiveKeyID = common.InitialKeyKID
+	return nil
+}
+
+func derivedJWKID(n, e string) string {
+	sum := sha256.Sum256([]byte(n + "." + e))
+	return common.InitialKeyKID + "-" + base64.RawURLEncoding.EncodeToString(sum[:6])
+}
+
+func newJWKKey(kid, n, e, description string) *JwkKey {
+	return &JwkKey{
+		Sid:         common.SystemName,
+		Kid:         kid,
+		Kty:         "RSA",
+		Use:         "sig",
+		Alg:         "RS256",
+		N:           n,
+		E:           e,
+		IsActive:    true,
+		NotBefore:   nil,
+		ExpiresAt:   nil,
+		Description: description,
+	}
+}
+
+func ensureDefaultClient() error {
+	if !allowInsecureDefaultClient() {
+		common.SysLog("ALLOW_INSECURE_DEFAULT_CLIENT disabled, skip default OAuth client")
+		return nil
+	}
+	const defaultClientID = "fgf-mc-panel"
+	secretHash, err := common.Password2Hash("")
+	if err != nil {
+		return err
+	}
+	var client Client
+	err = DB.Where("client_id = ?", defaultClientID).First(&client).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		defaultClient := Client{
+			ClientID:      defaultClientID,
+			SecretHash:    secretHash,
+			RedirectURIs:  datatypes.JSON([]byte(`["http://localhost:3000/callback","http://localhost:8080/callback"]`)),
+			Scope:         "openid profile email",
+			GrantTypes:    datatypes.JSON([]byte(`["authorization_code"]`)),
+			ResponseTypes: datatypes.JSON([]byte(`["code"]`)),
+		}
+		return DB.Create(&defaultClient).Error
+	}
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(client.SecretHash) == "" {
+		return DB.Model(&client).Update("secret_hash", secretHash).Error
+	}
+	return nil
+}
+
+func allowInsecureDefaultClient() bool {
+	return common.DebugMode || common.GetEnvOrDefaultBool("ALLOW_INSECURE_DEFAULT_CLIENT", false)
 }
 
 func migrateDB() error {
@@ -306,20 +413,7 @@ func IsInitialized() *Startup {
 
 	if err := DB.First(&client).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Create a default client
-			defaultClient := Client{
-				ClientID:      "fgf-mc-panel",
-				SecretHash:    " ",
-				RedirectURIs:  datatypes.JSON([]byte(`["http://localhost:3000/callback","http://localhost:8080/callback"]`)),
-				Scope:         "openid profile email",
-				GrantTypes:    datatypes.JSON([]byte(`["authorization_code"]`)),
-				ResponseTypes: datatypes.JSON([]byte(`["code"]`)),
-			}
-			if err := DB.Create(&defaultClient).Error; err != nil {
-				common.SysError("database initialized error default Client Record error " + err.Error())
-			} else {
-				common.SysLog("Client database initialized")
-			}
+			common.SysLog("Missing OAuth client in database")
 		} else {
 			common.SysError("database initialized error " + err.Error())
 		}
