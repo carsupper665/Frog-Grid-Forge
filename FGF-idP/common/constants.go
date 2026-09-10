@@ -40,6 +40,21 @@ const (
 	RoleRootUser   = 6
 )
 
+// IsKnownRole 只認已定義的等級，是 admin API 唯一的角色輸入閘門。
+func IsKnownRole(level int) bool {
+	switch level {
+	case RoleGuestUser, RoleCommonUser, RoleAdminUser, RoleRootUser:
+		return true
+	}
+	return false
+}
+
+// middleware/auth.go 寫入、controller 讀取的請求身分。
+const (
+	CtxUserID = "fgf_uid"
+	CtxRole   = "fgf_role"
+)
+
 //// 到時候看看可以應用在哪裡
 //const (
 //	UserStatusEnabled  = 1 // don't use 0, 0 is the default value!

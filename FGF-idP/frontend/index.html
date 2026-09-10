@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>登入 · Grid Forge</title>
+  <link rel="icon" href="/login/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/login/assets/login.css?v=centered-card">
+  <script src="/login/assets/login.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="brand" aria-label="Grid Forge 身分驗證">
+      <span class="brand-mark" aria-hidden="true">GF</span>
+      <span>Grid Forge <span class="brand-detail">idP</span></span>
+    </header>
+    <main class="layout">
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">YOUR CONNECTION STARTS HERE</p>
+        <h1 id="page-title">登入<br><span>Grid Forge</span></h1>
+        <p class="intro-copy">一次驗證，連接你的服務。<br>使用 Grid Forge 帳號，繼續你的旅程。</p>
+      </section>
+      <section class="login-card" aria-labelledby="card-title">
+        <div class="card-header">
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span>身分驗證</p>
+          <h2 id="card-title">歡迎回來</h2>
+          <p id="card-description">使用你的帳號登入以繼續。</p>
+        </div>
+        <p id="feedback" role="alert" hidden></p>
+        <form id="login-form" action="/x/login" method="post">
+          <fieldset id="credentials" disabled>
+            <legend class="sr-only">登入資料</legend>
+            <div class="field">
+              <label for="account">帳號 / Email</label>
+              <input id="account" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="輸入帳號或 Email">
+            </div>
+            <div class="field">
+              <label for="password">密碼</label>
+              <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="輸入密碼">
+            </div>
+            <button id="submit" type="submit"><span id="submit-label">登入並繼續</span><span class="arrow" aria-hidden="true">→</span></button>
+          </fieldset>
+        </form>
+        <p class="card-note" id="card-note"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none"><path d="M4 7V5a4 4 0 0 1 8 0v2M3 7h10v7H3z" stroke="currentColor" stroke-width="1.2"/><path d="M8 10v2" stroke="currentColor"/></svg>你的登入資訊會安全地送往 Grid Forge。</p>
+        <noscript><p class="noscript">請啟用 JavaScript 後重新整理，以繼續登入。</p></noscript>
+      </section>
+    </main>
+    <footer><span>GRID FORGE</span><span>一個帳號，連接每段旅程。</span></footer>
+  </div>
+</body>
+</html>

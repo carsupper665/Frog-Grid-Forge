@@ -1,0 +1,9 @@
+[submodule "mc-server-backend"]
+	path = mc-server-backend
+	url = https://github.com/carsupper665/mc-server-backend.git
+[submodule "trading"]
+	path = trading
+	url = https://github.com/carsupper665/trading.git
+[submodule "chaintrace"]
+	path = chaintrace
+	url = https://github.com/carsupper665/chaintrace.git

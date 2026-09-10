@@ -4,8 +4,10 @@ import (
 	"FGF-idP/common"
 	"FGF-idP/middleware"
 	"FGF-idP/model"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -18,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
@@ -56,8 +59,8 @@ func TestAuthRedirectsToLoginWithReqID(t *testing.T) {
 	if reqID == "" {
 		t.Fatalf("expected req_id in redirect, got %q", location)
 	}
-	if _, ok := getAuthRequest(reqID); !ok {
-		t.Fatalf("expected auth request %q to be cached", reqID)
+	if _, err := model.GetAuthRequest(context.Background(), reqID); err != nil {
+		t.Fatalf("expected auth request %q to be stored", reqID)
 	}
 }
 
@@ -115,8 +118,8 @@ func TestAuthDirectCodeWithValidSessionAndTrustedDevice(t *testing.T) {
 	if parsed.Query().Get("state") != "state-session" {
 		t.Fatalf("expected state to round-trip, got %q", resp.Header().Get("Location"))
 	}
-	if _, ok := getAuthCode(code); !ok {
-		t.Fatalf("expected auth code %q to be cached", code)
+	if _, err := model.GetAuthCode(context.Background(), code); err != nil {
+		t.Fatalf("expected auth code %q to be stored", code)
 	}
 }
 
@@ -214,10 +217,10 @@ func TestLoginRedirectsWithCodeForKnownDevice(t *testing.T) {
 	if parsed.Query().Get("state") != "state-login" {
 		t.Fatalf("expected state to round-trip, got %q", location)
 	}
-	if _, ok := getAuthCode(code); !ok {
-		t.Fatalf("expected auth code %q to be cached", code)
+	if _, err := model.GetAuthCode(context.Background(), code); err != nil {
+		t.Fatalf("expected auth code %q to be stored", code)
 	}
-	if _, ok := getAuthRequest(reqID); ok {
+	if _, err := model.GetAuthRequest(context.Background(), reqID); err != gorm.ErrRecordNotFound {
 		t.Fatalf("expected auth request %q to be removed after code issue", reqID)
 	}
 	if !hasSetCookie(resp, common.JwtCookieName) {
@@ -245,9 +248,9 @@ func TestLoginReturnsVerificationRequiredForNewDevice(t *testing.T) {
 	if !ok || deviceID == "" {
 		t.Fatalf("expected %s cookie value", common.DeviceCookieName)
 	}
-	authReq, ok := getAuthRequest(reqID)
-	if !ok {
-		t.Fatalf("expected auth request %q to remain cached", reqID)
+	authReq, err := model.GetAuthRequest(context.Background(), reqID)
+	if err != nil {
+		t.Fatalf("expected auth request %q to remain stored", reqID)
 	}
 	if authReq.EmailVerifyDeviceID == nil || *authReq.EmailVerifyDeviceID != deviceID {
 		t.Fatalf("expected verification token bound to new device %q, got %#v", deviceID, authReq.EmailVerifyDeviceID)
@@ -274,9 +277,9 @@ func TestLoginReturnsVerificationRequiredForExistingUntrustedDevice(t *testing.T
 	if resp.Code != http.StatusNonAuthoritativeInfo {
 		t.Fatalf("expected 203, got %d body=%s", resp.Code, resp.Body.String())
 	}
-	authReq, ok := getAuthRequest(reqID)
-	if !ok {
-		t.Fatalf("expected auth request %q to remain cached", reqID)
+	authReq, err := model.GetAuthRequest(context.Background(), reqID)
+	if err != nil {
+		t.Fatalf("expected auth request %q to remain stored", reqID)
 	}
 	if authReq.EmailVerifyDeviceID == nil || *authReq.EmailVerifyDeviceID != "existing-but-untrusted-device" {
 		t.Fatalf("expected verification token bound to existing device, got %#v", authReq.EmailVerifyDeviceID)
@@ -316,15 +319,17 @@ func TestVerifyRedirectsWithCodeForValidToken(t *testing.T) {
 		t.Fatalf("generate email token: %v", err)
 	}
 
-	authReq := &AuthRequest{
+	authReq := &model.AuthRequest{
 		ID:          "verify-req",
 		ClientID:    env.clientID,
 		RedirectURI: env.redirectURI,
 		Scope:       "openid profile",
 		State:       "verify-state",
 	}
-	setAuthRequest(authReq)
-	if err := setAuthEmailToken(authReq.ID, token, "verify-device"); err != nil {
+	if err := model.CreateAuthRequest(context.Background(), authReq); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.BindAuthVerification(context.Background(), authReq.ID, token, "verify-device", env.user.ID); err != nil {
 		t.Fatalf("set auth email token: %v", err)
 	}
 
@@ -348,8 +353,8 @@ func TestVerifyRedirectsWithCodeForValidToken(t *testing.T) {
 	if parsed.Query().Get("state") != "verify-state" {
 		t.Fatalf("expected state to round-trip, got %q", location)
 	}
-	if _, ok := getAuthCode(code); !ok {
-		t.Fatalf("expected auth code %q to be cached", code)
+	if _, err := model.GetAuthCode(context.Background(), code); err != nil {
+		t.Fatalf("expected auth code %q to be stored", code)
 	}
 	deviceExists, err := model.IsTrustedDevice(env.user.ID, "verify-device")
 	if err != nil {
@@ -370,15 +375,17 @@ func TestVerifyRejectsDifferentDeviceAndAcceptsOriginal(t *testing.T) {
 		t.Fatalf("generate email token: %v", err)
 	}
 
-	authReq := &AuthRequest{
+	authReq := &model.AuthRequest{
 		ID:          "verify-bound-req",
 		ClientID:    env.clientID,
 		RedirectURI: env.redirectURI,
 		Scope:       "openid profile",
 		State:       "bound-state",
 	}
-	setAuthRequest(authReq)
-	if err := setAuthEmailToken(authReq.ID, token, "original-device"); err != nil {
+	if err := model.CreateAuthRequest(context.Background(), authReq); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.BindAuthVerification(context.Background(), authReq.ID, token, "original-device", env.user.ID); err != nil {
 		t.Fatalf("set auth email token: %v", err)
 	}
 
@@ -441,9 +448,9 @@ func TestTokenReturnsTokensForValidAuthorizationCode(t *testing.T) {
 	}
 	assertJWTHeaderKid(t, data["access_token"].(string), common.ActiveKeyID)
 	assertJWTHeaderKid(t, data["id_token"].(string), common.ActiveKeyID)
-	authCode, ok := getAuthCode(code)
-	if !ok {
-		t.Fatalf("expected auth code %q to remain cached for used-check", code)
+	authCode, err := model.GetAuthCode(context.Background(), code)
+	if err != nil {
+		t.Fatalf("expected auth code %q to remain stored for used-check", code)
 	}
 	if !authCode.IsUsed {
 		t.Fatal("expected auth code to be marked used")
@@ -592,7 +599,6 @@ func setupControllerTest(t *testing.T) *controllerTestEnv {
 	if err := model.InitDB(); err != nil {
 		t.Fatalf("init db: %v", err)
 	}
-	InitAuthCache()
 	upsertTestClient(t, clientID, clientSecret, redirectURI)
 
 	user, err := model.GetUserByName(username)
@@ -632,7 +638,6 @@ func closeTestDB(t *testing.T) {
 	}
 	_ = sqlDB.Close()
 	model.DB = nil
-	InitAuthCache()
 }
 
 func writeTestKeyPair(t *testing.T, privatePath, publicPath string) {
@@ -829,5 +834,169 @@ func assertBodyContains(t *testing.T, resp *httptest.ResponseRecorder, want stri
 	t.Helper()
 	if !strings.Contains(resp.Body.String(), want) {
 		t.Fatalf("expected body to contain %q, got %s", want, resp.Body.String())
+	}
+}
+
+func TestTokenPKCEFailureDoesNotConsumePersistedCode(t *testing.T) {
+	env := setupControllerTest(t)
+	verifier := strings.Repeat("v", 43)
+	digest := sha256.Sum256([]byte(verifier))
+	code := &model.AuthCode{Code: "pkce-code", ClientID: env.clientID, RedirectURI: env.redirectURI, UserID: env.user.ID, Scope: "openid", CodeChallenge: base64.RawURLEncoding.EncodeToString(digest[:]), CodeChallengeMethod: "S256", ExpiresAt: time.Now().Add(time.Minute)}
+	if err := model.DB.Create(code).Error; err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code.Code}, "client_id": {env.clientID}, "client_secret": {env.clientSecret}, "redirect_uri": {env.redirectURI}, "code_verifier": {"wrong"}}
+	resp := performRequest(t, env.router, http.MethodPost, "/x/token", form.Encode(), "application/x-www-form-urlencoded", nil)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("wrong verifier accepted: %d %s", resp.Code, resp.Body.String())
+	}
+	assertJSONError(t, resp, "invalid_grant")
+	stored, err := model.GetAuthCode(context.Background(), code.Code)
+	if err != nil || stored.IsUsed {
+		t.Fatalf("failed PKCE consumed code: %#v %v", stored, err)
+	}
+	form.Set("code_verifier", verifier)
+	resp = performRequest(t, env.router, http.MethodPost, "/x/token", form.Encode(), "application/x-www-form-urlencoded", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("correct verifier rejected: %d %s", resp.Code, resp.Body.String())
+	}
+	resp = performRequest(t, env.router, http.MethodPost, "/x/token", form.Encode(), "application/x-www-form-urlencoded", nil)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("replay accepted: %d %s", resp.Code, resp.Body.String())
+	}
+	assertJSONError(t, resp, "invalid_grant")
+}
+
+func TestAuthStorageFailuresDoNotRedirect(t *testing.T) {
+	for _, table := range []string{"auth_requests", "auth_codes"} {
+		t.Run(table, func(t *testing.T) {
+			env := setupControllerTest(t)
+			if err := model.DB.Exec("CREATE TRIGGER reject_auth_insert BEFORE INSERT ON " + table + " BEGIN SELECT RAISE(ABORT, 'storage failed'); END").Error; err != nil {
+				t.Fatal(err)
+			}
+			var cookies []*http.Cookie
+			if table == "auth_codes" {
+				if err := model.SaveDevice(env.deviceID, "test", "127.0.0.1", env.user.ID); err != nil {
+					t.Fatal(err)
+				}
+				cookies = []*http.Cookie{sessionCookieForUser(t, env), {Name: common.DeviceCookieName, Value: env.deviceID}}
+			}
+			resp := performRequest(t, env.router, http.MethodGet, authPath(env, "failure", "openid"), "", "", cookies)
+			if resp.Code != http.StatusInternalServerError || resp.Header().Get("Location") != "" {
+				t.Fatalf("write failure redirected: %d %s", resp.Code, resp.Body.String())
+			}
+			assertJSONError(t, resp, "server_error")
+		})
+	}
+}
+
+func TestLoginRejectsExpiredRequestAndStorageFailure(t *testing.T) {
+	env := setupControllerTest(t)
+	id := startAuthorization(t, env, "expiry")
+	if err := model.DB.Model(&model.AuthRequest{}).Where("id = ?", id).Update("expires_at", time.Now().Add(-time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"username":%q,"password":%q,"req_id":%q}`, env.username, env.password, id)
+	resp := performRequest(t, env.router, http.MethodPost, "/x/login", body, "application/json", nil)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expired request accepted: %d %s", resp.Code, resp.Body.String())
+	}
+	assertJSONError(t, resp, "invalid_req_id")
+	if err := model.DB.Migrator().DropTable(&model.AuthRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	resp = performRequest(t, env.router, http.MethodPost, "/x/login", body, "application/json", nil)
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("DB failure hidden: %d %s", resp.Code, resp.Body.String())
+	}
+	assertJSONError(t, resp, "server_error")
+}
+
+func TestTokenStorageFailureDoesNotIssueTokens(t *testing.T) {
+	env := setupControllerTest(t)
+	code := &model.AuthCode{Code: "storage-code", ClientID: env.clientID, RedirectURI: env.redirectURI, UserID: env.user.ID, Scope: "openid", ExpiresAt: time.Now().Add(time.Minute)}
+	if err := model.DB.Create(code).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Exec("CREATE TRIGGER reject_auth_consume BEFORE UPDATE ON auth_codes BEGIN SELECT RAISE(ABORT, 'storage failed'); END").Error; err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code.Code}, "client_id": {env.clientID}, "client_secret": {env.clientSecret}, "redirect_uri": {env.redirectURI}}
+	resp := performRequest(t, env.router, http.MethodPost, "/x/token", form.Encode(), "application/x-www-form-urlencoded", nil)
+	if resp.Code == http.StatusOK || strings.Contains(resp.Body.String(), "access_token") {
+		t.Fatalf("DB failure issued token: %d %s", resp.Code, resp.Body.String())
+	}
+	stored, err := model.GetAuthCode(context.Background(), code.Code)
+	if err != nil || stored.IsUsed {
+		t.Fatalf("DB failure consumed code: %#v %v", stored, err)
+	}
+}
+
+func TestVerifyConcurrentReplayIssuesOnlyOneSession(t *testing.T) {
+	env := setupControllerTest(t)
+	ctx := context.Background()
+	token, err := common.GenEmailSignedToken(env.user.Email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &model.AuthRequest{ID: "verification-race", ClientID: env.clientID, RedirectURI: env.redirectURI, Scope: "openid"}
+	if err := model.CreateAuthRequest(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.BindAuthVerification(ctx, req.ID, token, "race-device", env.user.ID); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := model.DB.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	// Hold both handlers after reading the same binding. Serial database writes
+	// then ensure a lock error cannot accidentally hide a replay vulnerability.
+	arrivals := make(chan struct{}, 2)
+	release := make(chan struct{})
+	if err := model.DB.Callback().Query().After("gorm:query").Register("test:verification_race", func(tx *gorm.DB) {
+		if tx.Statement.Table == "auth_requests" {
+			arrivals <- struct{}{}
+			<-release
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan *httptest.ResponseRecorder, 2)
+	for range 2 {
+		go func() {
+			request := httptest.NewRequest(http.MethodGet, "/x/verify?t="+url.QueryEscape(token), nil)
+			request.AddCookie(&http.Cookie{Name: common.DeviceCookieName, Value: "race-device"})
+			response := httptest.NewRecorder()
+			env.router.ServeHTTP(response, request)
+			results <- response
+		}()
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for range 2 {
+		select {
+		case <-arrivals:
+		case <-timer.C:
+			close(release)
+			t.Fatal("handlers did not both read verification binding")
+		}
+	}
+	close(release)
+	sessions, redirects := 0, 0
+	for range 2 {
+		response := <-results
+		if hasSetCookie(response, common.JwtCookieName) {
+			sessions++
+		}
+		if response.Code == http.StatusFound {
+			redirects++
+		} else if response.Code != http.StatusBadRequest {
+			t.Errorf("unexpected response: %d %s", response.Code, response.Body.String())
+		}
+	}
+	if sessions != 1 || redirects != 1 {
+		t.Fatalf("concurrent replay issued %d sessions and %d codes; want one each", sessions, redirects)
 	}
 }

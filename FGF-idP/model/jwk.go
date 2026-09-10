@@ -21,6 +21,13 @@ type Client struct {
 	Scope         string         `gorm:"column:scope;type:text"`       // "openid profile offline_access"
 	GrantTypes    datatypes.JSON `gorm:"column:grant_types;type:json"` // []string
 	ResponseTypes datatypes.JSON `gorm:"column:response_types;type:json"`
+
+	// Admin console metadata. Soft delete doubles as the disable switch: a
+	// deleted client stops matching every lookup below without a second flag.
+	Name      string `gorm:"column:name;size:64"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt gorm.DeletedAt `gorm:"index"`
 }
 
 type JwkKey struct {
@@ -126,9 +133,13 @@ func ValiClient(clientID, redirectURI, clientSecret string) (bool, string, error
 	if err != nil {
 		return false, msg, err
 	}
-	isValid = common.ValidatePasswordAndHash(clientSecret, client.SecretHash)
+	// The redirect URI verdict must be honoured before the secret is checked;
+	// RFC 6749 4.1.3 requires the token endpoint to reject a mismatch.
 	if !isValid {
 		return false, msg, nil
+	}
+	if !common.ValidatePasswordAndHash(clientSecret, client.SecretHash) {
+		return false, "Invalid client secret", nil
 	}
 	return true, "", nil
 }

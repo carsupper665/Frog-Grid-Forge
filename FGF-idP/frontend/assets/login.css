@@ -1,0 +1,68 @@
+@font-face { font-family: Inter; src: url("/login/assets/inter-latin.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+* { box-sizing: border-box; }
+:root { color-scheme: dark; font-family: Inter, "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif; color: #e9e9ed; background: #161826; font-synthesis: none; }
+body { margin: 0; min-width: 320px; background: linear-gradient(100deg, rgba(22,24,38,.78), rgba(22,24,38,.38) 48%, rgba(22,24,38,.26)), url("/login/assets/forest.webp") center / cover fixed; }
+body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background-image: linear-gradient(to right, #e9e9ed06 1px, transparent 1px), linear-gradient(to bottom, #e9e9ed06 1px, transparent 1px); background-size: 56px 56px; }
+body::after { content: ""; position: absolute; top: 0; left: 0; width: 2px; height: 240px; background: linear-gradient(#9184d9, transparent); }
+.shell { position: relative; max-width: 1280px; min-height: 100svh; margin: auto; padding: 52px 64px 28px; display: flex; flex-direction: column; }
+.brand { display: flex; align-items: center; gap: 12px; font-size: 13px; letter-spacing: .22em; text-transform: uppercase; }
+.brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #9184d9; border-radius: 4px; background: #16182680; color: #d2cefd; letter-spacing: 0; }
+.brand-detail { color: #cfd3e5; }
+.layout { flex: 1; width: 100%; max-width: 1080px; align-self: center; display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 500px); gap: 64px; align-items: center; align-content: center; padding: 48px 0 80px; }
+.intro { padding-bottom: 6px; }
+.eyebrow { margin: 0; color: #d2cefd; font-size: 11px; line-height: 1.5; letter-spacing: .17em; font-weight: 500; }
+.intro > .eyebrow { color: #c1c6d8; margin-bottom: 25px; font-size: 10px; }
+h1 { margin: 0; color: #cfd3e5; font-size: clamp(48px, 4.5vw, 64px); line-height: 1.12; font-weight: 500; letter-spacing: -.035em; text-shadow: 0 2px 18px #0007; }
+h1 span { white-space: nowrap; }
+.intro-copy { margin: 25px 0 0; max-width: 400px; color: #e0e3ed; font-size: 15px; line-height: 1.9; }
+.login-card { min-height: 320px; display: flex; flex-direction: column; justify-content: center; padding: 42px; border: 1px solid #e9e9ed3d; border-radius: 14px; background: linear-gradient(152deg, #e9e9ed24, #1618265c 42%, #16182685); backdrop-filter: blur(32px) saturate(1.6) brightness(1.06); -webkit-backdrop-filter: blur(32px) saturate(1.6) brightness(1.06); box-shadow: inset 0 1px 0 #e9e9ed52, inset 0 0 0 1px #e9e9ed0d, 0 20px 48px #0008; }
+.card-header .eyebrow { display: flex; align-items: center; gap: 8px; }
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: #b5abfc; box-shadow: 0 0 12px #9184d9; }
+h2 { margin: 16px 0 10px; font-size: 26px; font-weight: 500; letter-spacing: -.02em; }
+#card-description { margin: 0; color: #d0d4e2; font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
+fieldset { padding: 0; margin: 31px 0 0; border: 0; min-width: 0; }
+.field + .field { margin-top: 29px; }
+label { display: block; font-size: 12px; letter-spacing: .1em; color: #d4d8e7; margin-bottom: 8px; }
+input { width: 100%; padding: 7px 0 13px; border: 0; border-bottom: 1px solid #e9e9ed55; border-radius: 0; background: transparent; color: #f4f3ff; font: inherit; font-size: 17px; transition: border-color .15s; }
+input::placeholder { color: #aeb5c8; font-size: 15px; }
+input:focus-visible { outline: none; border-color: #c8bfff; box-shadow: 0 1px #c8bfff; }
+input:user-invalid { border-color: #ffc2c7; }
+input:-webkit-autofill { -webkit-text-fill-color: #f4f3ff; box-shadow: 0 0 0 1000px #252b42 inset; caret-color: #fff; }
+button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 54px; padding: 16px 20px; margin-top: 32px; border: 1px solid #a99be9; border-radius: 8px; background: #9184d91a; color: #e0daff; font: inherit; font-size: 15px; letter-spacing: .06em; cursor: pointer; transition: background .15s, box-shadow .15s; }
+button:hover:not(:disabled) { background: #9184d933; box-shadow: 0 0 26px #9184d94d; }
+button:focus-visible { outline: 2px solid #ded8ff; outline-offset: 4px; }
+fieldset:disabled button { opacity: .65; cursor: wait; }
+.arrow { font-size: 23px; line-height: 1; }
+.card-note { display: flex; align-items: flex-start; gap: 8px; margin: 24px 0 0; color: #c1c8da; font-size: 11px; line-height: 1.7; }
+.card-note svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 2px; }
+#feedback { padding: 12px 14px; border-left: 2px solid #d6a1ac; color: #ffe0e5; background: #39283170; font-size: 13px; line-height: 1.7; margin: 22px 0 0; }
+footer { display: flex; justify-content: space-between; gap: 16px; color: #c1c8d8; font-size: 10px; letter-spacing: .06em; }
+footer span:first-child { letter-spacing: .22em; }
+[hidden] { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.noscript { color: #ffe0e5; font-size: 13px; }
+@supports not (backdrop-filter: blur(1px)) { .login-card { background: #1e2335ed; } }
+@media (max-width: 960px) {
+  .shell { padding: 28px 24px 24px; max-width: 620px; }
+  .layout { grid-template-columns: 1fr; gap: 28px; padding: 32px 0 36px; align-items: start; align-content: start; }
+  .intro > .eyebrow { display: none; }
+  h1 { font-size: clamp(42px, 9vw, 58px); }
+  h1 br { display: none; }
+  h1 span { display: block; }
+  .intro-copy { margin-top: 18px; font-size: 14px; }
+  .login-card { padding: 30px; min-height: 0; }
+  body { background-attachment: scroll; background-position: 42% center; }
+}
+@media (max-width: 380px) { .shell { padding-inline: 18px; } .login-card { padding: 25px; } footer span:last-child { display: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+
+@keyframes enter-down {
+  from { opacity: 0; transform: translateY(-28px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .brand, .intro, .login-card, footer { animation: enter-down 640ms cubic-bezier(.22, 1, .36, 1) both; }
+  .intro { animation-delay: 80ms; }
+  .login-card { animation-delay: 160ms; }
+  footer { animation-delay: 240ms; }
+}

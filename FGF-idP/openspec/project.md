@@ -4,10 +4,10 @@
 Frog Grid Forge Identity Provider（FGF-idP）提供組織內部與合作服務使用的 OAuth2 Authorization Code（含 PKCE）與 OpenID Connect 身分核發能力。啟動時會載入環境變數、初始化資料庫、布建 `.well-known` 端點與 `/x` 授權流程，並將關鍵事件寫入系統日誌與 Discord 通報。
 
 ## Tech Stack
-- Go 1.24.4 與 Go modules
+- Go 1.26.0 以上、Go 1.26.8 工具鏈與 Go modules
 - Gin + gin-contrib（gzip、CORS、logger、限流）
 - GORM + PostgreSQL（正式）/SQLite（本機）資料層
-- golang-jwt/jwt、godotenv、bytedance gopkg、x/crypto 等安全與工具套件
+- golang-jwt/jwt/v5、godotenv、bytedance gopkg、x/crypto 等安全與工具套件
 - 自建 RSA 金鑰 + JWT-cookie (`au4ul4`) 驅動登入狀態
 - SMTP/Outlook、Discord Webhook 整合
 - 預設執行埠 3000（`PORT` 可覆寫）；`DEBUG=true` 保留 Gin Debug mode，否則強制 Release mode 並啟用 gzip/CORS/限流中介層。
@@ -24,12 +24,12 @@ Frog Grid Forge Identity Provider（FGF-idP）提供組織內部與合作服務�
 ### Architecture Patterns
 - `main -> router -> controller -> service/model` 分層；`main` 載入 env、初始化 DB 與 router，`router` 註冊 gzip/CORS/限流，中介層含 Request-Id、panic recovery。
 - `common` 提供常數、加解密、email/JWT/環境 helper；`controller` 僅處理 HTTP，資料庫操作集中在 `model`。
-- 授權碼流程使用 in-memory `sync.RWMutex` cache 儲存 `AuthRequest`、`AuthCode`；啟動時確認 JWK metadata、金鑰與預設 OAuth client。
+- 授權狀態由 model 透過 GORM 儲存 `AuthRequest`、`AuthCode`，控制器負責 HTTP 與 PKCE 驗證；啟動時確認 JWK metadata、金鑰與預設 OAuth client。
 - `.well-known` 與 `/x` 群組掛載 gzip/CORS/全域 IP rate-limit；`request-id`/logger middleware 已實作但目前未在 router 掛載，需注意追蹤鏈遺失。
-- 授權碼有效期 5 分鐘且僅存於記憶體，服務重啟或節點切換會使快取遺失。
+- 授權請求有效期 10 分鐘，授權碼有效期 5 分鐘且以資料庫條件更新保證單次兌換；過期資料每分鐘清除。
 
 ### Testing Strategy
-- 目前缺 `_test.go`，開發者以本機請求驗證。新功能應建立單元或整合測試（`go test ./...`）涵蓋密鑰載入、資料庫遷移與 controller happy/failed path。
+- 已有 `_test.go` 回歸測試。新功能應建立單元或整合測試（`go test ./...`）涵蓋密鑰載入、資料庫遷移與 controller happy/failed path。
 - 變更前後至少手動驗證 `.well-known/*` 與 `/x` OIDC 流程；安全相關（JWT、密碼哈希）需加入 regression 測試。
 
 ### Git Workflow
@@ -48,7 +48,7 @@ Frog Grid Forge Identity Provider（FGF-idP）提供組織內部與合作服務�
 - `.env` 必須提供 `SQL_DSN`（未設則改用 SQLite）、SMTP、Discord webhook、root credentials 等敏感資訊。
 - RSA 金鑰需存在或由 `common.GenerateRSAKeyPair` 於 `PRIV_KEY_PATH/PUB_KEY_PATH` 自動產生，否則 JWT 簽章與 JWKS 會失效。
 - 伺服器預設 Release mode，需依 `common.GlobalApiRateLimit*` 施加限流；Request-Id 與 panic recovery 必須保持啟用以利追蹤。
-- 授權碼 cache 屬揮發性，遺失後必須重新走 `/x/auth`。
+- 授權狀態與 token 撤銷紀錄存於資料庫；多節點需共用 PostgreSQL、issuer、簽章金鑰與相關 secrets。
 - `SESSION_SECRET` 不可使用預設 `random_string`，未設定時會中止啟動；`CRYPTO_SECRET`/`HMAC_SECRET` 若未提供將以 `SESSION_SECRET` 回退。
 - DB 連線池預設 `MaxIdle/MaxOpen=150`、`Lifetime=60 分鐘`，可透過 `DB_MAX_*` 與 `DB_CONN_LIFETIME` 微調；`SQL_LOG_DSN` 可指定獨立日誌資料庫。
 
@@ -61,5 +61,5 @@ Frog Grid Forge Identity Provider（FGF-idP）提供組織內部與合作服務�
 
 ## Current Gaps / OIDC Risks
 - `/revoke` 尚未實作；本輪明確不支援 refresh token，Discovery 也不宣告 `refresh_token` 或 `offline_access`。
-- Auth request、verification request 與 authorization code cache 仍是 in-memory，服務重啟或多節點部署會使 pending flow 失效。
+- 外部資源伺服器若離線驗證 JWT，需另行執行 token 撤銷策略；本服務會於 session 與 UserInfo 驗證查詢撤銷紀錄。
 - Production client provisioning 需手動建立安全 secret；空 secret 的 default client 只允許在 `DEBUG=true` 或 `ALLOW_INSECURE_DEFAULT_CLIENT=true` 時自動建立。

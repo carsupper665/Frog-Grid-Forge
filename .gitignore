@@ -38,3 +38,15 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# Agent files
+docs/
+.scratch/
+.omx/
+
+# Browser verification artifacts
+/output/playwright/
+
+/output/fgf-local/
+
+/.playwright-mcp/

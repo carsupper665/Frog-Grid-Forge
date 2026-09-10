@@ -11,17 +11,11 @@ import (
 	"fmt"
 	"strings"
 
-	// "os"
-	// "strings"
-	// "sync"
 	"time"
 
-	"gorm.io/datatypes"
-	// "github.com/glebarez/sqlite"
-	// "gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	//"gorm.io/gorm"
 	"github.com/glebarez/sqlite"
+	"gorm.io/datatypes"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -38,91 +32,70 @@ var (
 	jwkMetadata *JakMetadata
 )
 
-func createRootAccountForTest() error {
-	var user User
-	//if user.Status != common.UserStatusEnabled {
-	if err := DB.First(&user).Error; err != nil {
-		userEmail := common.GetEnvOrDefaultString("ROOT_USER_EMAIL", "")
-
-		if userEmail == "" {
-			return errors.New("ROOT_USER_EMAIL is not set, please set it in .env file")
-		}
-		password := common.GetEnvOrDefaultString("ROOT_USER_PASSWORD", "123456")
-		username := common.GetEnvOrDefaultString("ROOT_USER_NAME", "root")
-		salt := common.GetRandomString(16)
-		hashedPassword, err := common.Password2Hash(password + salt)
-		if err != nil {
-			return err
-		}
-		rootUser := User{
-			Username:    username,
-			Password:    hashedPassword,
-			Email:       userEmail,
-			Role:        common.RoleRootUser,
-			Salt:        salt,
-			DisplayName: "Root User",
-			AccessToken: nil,
-		}
-		DB.Create(&rootUser)
-		common.SysLog("no user exists, create a root user for you: username is " + username + ", password is " + password + ", email is:" + userEmail)
+func createRootAccount() error {
+	userEmail := common.GetEnvOrDefaultString("ROOT_USER_EMAIL", "")
+	if userEmail == "" {
+		return errors.New("ROOT_USER_EMAIL is not set, please set it in .env file")
 	}
+	password := common.GetEnvOrDefaultString("ROOT_USER_PASSWORD", "123456")
+	username := common.GetEnvOrDefaultString("ROOT_USER_NAME", "root")
+	salt := common.GetRandomString(16)
+	hashedPassword, err := common.Password2Hash(password + salt)
+	if err != nil {
+		return err
+	}
+	rootUser := User{
+		Username:    username,
+		Password:    hashedPassword,
+		Email:       userEmail,
+		Role:        common.RoleRootUser,
+		Salt:        salt,
+		DisplayName: "Root User",
+		AccessToken: nil,
+	}
+	if err := DB.Create(&rootUser).Error; err != nil {
+		return err
+	}
+	common.SysLog("root user created: username is " + username + ", email is: " + userEmail)
 	return nil
 }
 
-func InitSqliteDB(isLog bool) (*gorm.DB, error) {
+func openSQLiteDB() (*gorm.DB, error) {
 	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
 		PrepareStmt: true, // precompile SQL
 	})
 }
 
-func InitDB() error {
-	var db *gorm.DB
-	var initDbErr error
-
-	if sqlDsn := common.SQLDsn; sqlDsn != "" {
-		if !strings.HasPrefix(sqlDsn, "postgres://") &&
-			!strings.HasPrefix(sqlDsn, "postgresql://") {
-			common.SysLog("Unsupported database type, only PostgreSQL is supported currently, falling back to SQLite")
-			db, initDbErr = InitSqliteDB(false)
-			if initDbErr != nil {
-				return initDbErr
-			}
-		}
-		db, initDbErr = gorm.Open(postgres.New(postgres.Config{
-			DSN:                  common.SQLDsn,
-			PreferSimpleProtocol: true, // disables implicit prepared statement usage
-		}), &gorm.Config{
-			PrepareStmt: true, // precompile SQL
-		})
-	} else {
-		db, initDbErr = InitSqliteDB(false)
-		if initDbErr != nil {
-			return initDbErr
-		}
+func openConfiguredDB() (*gorm.DB, error) {
+	sqlDsn := common.SQLDsn
+	if sqlDsn == "" {
+		return openSQLiteDB()
 	}
-
-	if initDbErr != nil {
-		return initDbErr
+	if !strings.HasPrefix(sqlDsn, "postgres://") &&
+		!strings.HasPrefix(sqlDsn, "postgresql://") {
+		common.SysLog("Unsupported database type, only PostgreSQL is supported currently, falling back to SQLite")
+		return openSQLiteDB()
 	}
+	return gorm.Open(postgres.New(postgres.Config{
+		DSN: sqlDsn,
+	}), &gorm.Config{PrepareStmt: true})
+}
 
-	DB = db
-	sqlDB, err := DB.DB()
+func configureConnectionPool(db *gorm.DB) error {
+	sqlDB, err := db.DB()
 	if err != nil {
 		return err
 	}
 	sqlDB.SetMaxIdleConns(common.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(common.MaxOpenConns)
 	sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.Lifetime*60))
-	common.SysLog("database migration started")
-	err = migrateDB()
-	err = CheckRootUser()
-	if err != nil {
-		return err
-	}
+	return nil
+}
 
+func buildMetadata() JakMetadata {
 	baseurl := strings.TrimSuffix(common.GetEnvOrDefaultString("BACKEND_BASE_URL", fmt.Sprintf("http://localhost:%d", common.Port)), "/")
 	endpoint := baseurl + "/x/"
-	metadata := JakMetadata{
+	return JakMetadata{
 		Sid:                   "FGF-idP",
 		Issuer:                baseurl,
 		JwksURI:               baseurl + "/.well-known/keys",
@@ -130,54 +103,56 @@ func InitDB() error {
 		TokenEndpoint:         endpoint + "token",
 		UserinfoEndpoint:      endpoint + "userinfo",
 		EndSessionEndpoint:    endpoint + "logout",
-		RotateIntervalHours:   0,
-		LastRotatedAt:         nil,
-		NextRotateAt:          nil,
-		CreatedAt:             time.Time{},
-		UpdatedAt:             time.Time{},
-		DeletedAt:             gorm.DeletedAt{},
 	}
+}
 
-	startup := IsInitialized()
-	if startup != nil {
-		var jwkErr error
-		// DB is already initialized
-		common.SysLog("database already initialized at " + startup.InitAt.String() + ", version: " + startup.Version)
-		if err := upsertMetadata(metadata); err != nil {
-			return err
-		}
-		jwkMetadata, jwkErr = getMetadata()
-		if jwkErr != nil {
-			return jwkErr
-		}
-		if err := initKeys(); err != nil {
-			return err
-		}
-		return ensureDefaultClient()
+func InitDB() error {
+	db, err := openConfiguredDB()
+	if err != nil {
+		return err
 	}
-
-	if err := upsertMetadata(metadata); err != nil {
+	DB = db
+	if err := configureConnectionPool(DB); err != nil {
 		return err
 	}
 
+	common.SysLog("database migration started")
+	if err := migrateDB(); err != nil {
+		return err
+	}
+	if err := CheckRootUser(); err != nil {
+		return err
+	}
+
+	startup, err := findStartupRecord()
+	if err != nil {
+		return err
+	}
+	if startup != nil {
+		common.SysLog("database already initialized at " + startup.InitAt.String() + ", version: " + startup.Version)
+	}
+
+	if err := upsertMetadata(buildMetadata()); err != nil {
+		return err
+	}
 	jwkMetadata, err = getMetadata()
 	if err != nil {
 		return err
 	}
-
-	if err := initKeys(); err != nil {
+	if err := isKeyExists(); err != nil {
 		return err
 	}
 	if err := ensureDefaultClient(); err != nil {
 		return err
 	}
-
-	initRecord := Startup{
+	warnInsecureClients()
+	if startup != nil {
+		return nil
+	}
+	return DB.Create(&Startup{
 		Version: fmt.Sprintf("%s%s", common.Version, common.BuildNocolor),
 		InitAt:  time.Now(),
-	}
-	err = DB.Create(&initRecord).Error
-	return err
+	}).Error
 }
 
 func upsertMetadata(metadata JakMetadata) error {
@@ -198,15 +173,6 @@ func upsertMetadata(metadata JakMetadata) error {
 		"userinfo_endpoint":      metadata.UserinfoEndpoint,
 		"end_session_endpoint":   metadata.EndSessionEndpoint,
 	}).Error
-}
-
-func initKeys() error {
-	err := isKeyExists()
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func isKeyExists() error {
@@ -347,25 +313,41 @@ func ensureDefaultClient() error {
 	return nil
 }
 
+// warnInsecureClients reports clients that still accept an empty secret. It runs
+// once at startup, never on the request path, and only warns: refusing to boot
+// would break existing deployments on upgrade.
+func warnInsecureClients() {
+	if allowInsecureDefaultClient() {
+		return
+	}
+	var clients []Client
+	if err := DB.Model(&Client{}).Select("client_id", "secret_hash").Find(&clients).Error; err != nil {
+		common.SysError("insecure client scan failed: " + err.Error())
+		return
+	}
+	for _, client := range clients {
+		if common.ValidatePasswordAndHash("", client.SecretHash) {
+			common.SysError("OAuth client \"" + client.ClientID + "\" accepts an empty secret; rotate it from the admin console")
+		}
+	}
+}
+
 func allowInsecureDefaultClient() bool {
 	return common.DebugMode || common.GetEnvOrDefaultBool("ALLOW_INSECURE_DEFAULT_CLIENT", false)
 }
 
 func migrateDB() error {
-	err := DB.AutoMigrate(
+	return DB.AutoMigrate(
 		&User{},
+		&AuthRequest{},
+		&AuthCode{},
+		&RevokedToken{},
 		&UserDevice{},
 		&JakMetadata{},
 		&JwkKey{},
 		&Startup{},
 		&Client{},
 	)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // 之後搞一個可以第一次啟動跳註冊的東東，現在先自動創建
@@ -377,12 +359,16 @@ func CheckRootUser() error {
 		return nil
 	}
 
-	if RootUserExists() {
+	rootExists, err := rootUserExists()
+	if err != nil {
+		return err
+	}
+	if rootExists {
 		common.SysLog("Root user already exists, skip creating root user")
 		return nil
 	}
 
-	if err := createRootAccountForTest(); err != nil {
+	if err := createRootAccount(); err != nil {
 		return err
 	}
 
@@ -396,28 +382,15 @@ type Startup struct {
 	InitAt  time.Time
 }
 
-func IsInitialized() *Startup {
+func findStartupRecord() (*Startup, error) {
 	var startup Startup
-	var jwksKey JwkKey
-	var client Client
 	err := DB.First(&startup).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
 	if err != nil {
-		common.SysLog("database error: " + err.Error())
-		return nil
-	}
-
-	if err := DB.First(&jwksKey).Error; err != nil {
-		common.SysLog("Missing JWK key in database")
-		return nil
-	}
-
-	if err := DB.First(&client).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			common.SysLog("Missing OAuth client in database")
-		} else {
-			common.SysError("database initialized error " + err.Error())
-		}
+		return nil, err
 	}
 	common.SysLog("database initialized")
-	return &startup
+	return &startup, nil
 }
