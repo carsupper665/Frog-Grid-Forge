@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>管理後台 · Grid Forge</title>
+  <link rel="icon" href="/admin/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/admin/assets/login.css?v=1">
+  <link rel="stylesheet" href="/admin/assets/admin.css?v=2">
+  <script src="/admin/assets/admin.js?v=3" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="brand" aria-label="Grid Forge 管理後台">
+      <span class="brand-mark" aria-hidden="true">GF</span>
+      <span>Grid Forge <span class="brand-detail">管理後台</span></span>
+      <span class="brand-spacer"></span>
+      <span id="whoami" class="brand-detail" hidden></span>
+      <button id="logout" type="button" class="mini" hidden>登出</button>
+    </header>
+
+    <main class="layout admin-layout">
+      <section class="login-card" id="signin" hidden aria-labelledby="signin-title">
+        <div class="card-header">
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span>管理員登入</p>
+          <h2 id="signin-title">管理後台</h2>
+          <p id="signin-description">請使用具管理權限的帳號登入。</p>
+        </div>
+        <p id="signin-feedback" role="alert" hidden></p>
+        <form id="signin-form">
+          <fieldset id="signin-fields">
+            <legend class="sr-only">登入資料</legend>
+            <div class="field">
+              <label for="account">帳號 / Email</label>
+              <input id="account" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="輸入帳號或 Email">
+            </div>
+            <div class="field">
+              <label for="password">密碼</label>
+              <input id="password" type="password" autocomplete="current-password" required placeholder="輸入密碼">
+            </div>
+            <button id="signin-submit" type="submit"><span id="signin-label">登入</span><span class="arrow" aria-hidden="true">→</span></button>
+          </fieldset>
+        </form>
+      </section>
+
+      <section class="login-card console" id="console" hidden>
+        <p id="feedback" role="alert" hidden></p>
+
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab" role="tab" data-tab="users" aria-selected="true">使用者</button>
+          <button type="button" class="tab" role="tab" data-tab="clients" aria-selected="false" hidden>服務</button>
+        </div>
+
+        <section id="panel-users" role="tabpanel" aria-label="使用者">
+          <div class="toolbar user-toolbar">
+            <input id="user-search" type="search" placeholder="搜尋帳號、名稱或 Email" aria-label="搜尋使用者">
+            <button id="create-user" type="button" class="mini">新增使用者</button>
+          </div>
+          <section id="user-editor" class="user-editor" aria-labelledby="user-editor-title" hidden>
+            <h3 id="user-editor-title">新增使用者</h3>
+            <form id="user-form">
+              <fieldset id="user-fields">
+                <legend class="sr-only">使用者資料</legend>
+                <div class="user-form-grid">
+                  <div class="field">
+                    <label for="user-username">帳號</label>
+                    <input id="user-username" required minlength="3" maxlength="12" pattern="[A-Za-z0-9_.\-]{3,12}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="3–12 碼英數、底線、句點或連字號">
+                  </div>
+                  <div class="field">
+                    <label for="user-display-name">顯示名稱</label>
+                    <input id="user-display-name" maxlength="20" autocomplete="off" placeholder="選填，最多 20 字">
+                  </div>
+                  <div class="field">
+                    <label for="user-email">Email</label>
+                    <input id="user-email" type="email" required maxlength="255" autocomplete="off" autocapitalize="none" spellcheck="false">
+                  </div>
+                  <div class="field" id="user-role-field">
+                    <label for="user-role">初始權限</label>
+                    <select id="user-role"></select>
+                  </div>
+                  <div class="field" id="user-password-field">
+                    <label for="user-password">初始密碼</label>
+                    <input id="user-password" type="password" minlength="12" maxlength="56" autocomplete="new-password" required placeholder="至少 12 字元">
+                  </div>
+                </div>
+                <p id="user-edit-note" class="editor-note" hidden>變更 Email 後，使用者需重新驗證裝置。權限可在列表中調整。</p>
+                <div class="editor-actions">
+                  <button id="user-save" type="submit" class="mini">建立使用者</button>
+                  <button id="user-cancel" type="button" class="mini secondary">取消</button>
+                </div>
+              </fieldset>
+            </form>
+          </section>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>帳號</th><th>顯示名稱</th><th>Email</th><th>權限</th><th>操作</th></tr></thead>
+              <tbody id="user-rows"></tbody>
+            </table>
+          </div>
+          <p id="user-empty" class="empty" hidden>沒有符合的使用者。</p>
+          <div class="pager">
+            <button type="button" class="mini" data-page="users-prev">上一頁</button>
+            <span id="user-page">第 1 頁</span>
+            <button type="button" class="mini" data-page="users-next">下一頁</button>
+          </div>
+        </section>
+
+        <section id="panel-clients" role="tabpanel" aria-label="服務" hidden>
+          <p id="secret-box" class="secret" hidden>
+            <span class="secret-warn">請立即複製，離開此頁後將無法再次取得。</span>
+            <input id="secret-value" type="text" readonly aria-label="用戶端密鑰">
+          </p>
+
+          <details id="create-client">
+            <summary>註冊新服務</summary>
+            <form id="client-form">
+              <fieldset id="client-fields">
+                <legend class="sr-only">新服務</legend>
+                <div class="field">
+                  <label for="client-id">Client ID</label>
+                  <input id="client-id" type="text" required autocapitalize="none" spellcheck="false" placeholder="my-service">
+                </div>
+                <div class="field">
+                  <label for="client-name">顯示名稱</label>
+                  <input id="client-name" type="text" required placeholder="My Service">
+                </div>
+                <div class="field">
+                  <label for="client-scope">Scope</label>
+                  <input id="client-scope" type="text" required value="openid profile email" autocapitalize="none" spellcheck="false">
+                </div>
+                <div class="field">
+                  <label for="client-uris">Redirect URIs（一行一個）</label>
+                  <textarea id="client-uris" rows="3" required spellcheck="false" placeholder="https://example.com/callback"></textarea>
+                </div>
+                <button type="submit"><span id="client-label">建立服務</span><span class="arrow" aria-hidden="true">→</span></button>
+              </fieldset>
+            </form>
+          </details>
+
+          <div class="toolbar">
+            <input id="client-search" type="search" placeholder="搜尋 Client ID 或名稱" aria-label="搜尋服務">
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Client ID</th><th>名稱</th><th>Redirect URIs</th><th>Scope</th><th></th></tr></thead>
+              <tbody id="client-rows"></tbody>
+            </table>
+          </div>
+          <p id="client-empty" class="empty" hidden>沒有符合的服務。</p>
+          <div class="pager">
+            <button type="button" class="mini" data-page="clients-prev">上一頁</button>
+            <span id="client-page">第 1 頁</span>
+            <button type="button" class="mini" data-page="clients-next">下一頁</button>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <footer><span>GRID FORGE</span><span>一個帳號，連接每段旅程。</span></footer>
+  </div>
+
+  <template id="user-row">
+    <tr>
+      <td data-cell="id"></td>
+      <td data-cell="username"></td>
+      <td data-cell="display_name"></td>
+      <td data-cell="email"></td>
+      <td><select data-action="role" aria-label="權限等級"></select></td>
+      <td class="actions"><button type="button" class="mini" data-action="edit">編輯</button><button type="button" class="mini danger" data-action="delete">刪除</button></td>
+    </tr>
+  </template>
+
+  <template id="client-row">
+    <tr>
+      <td data-cell="client_id"></td>
+      <td data-cell="name"></td>
+      <td class="uris" data-cell="redirect_uris"></td>
+      <td data-cell="scope"></td>
+      <td class="actions">
+        <button type="button" class="mini" data-action="rotate">輪替密鑰</button>
+        <button type="button" class="mini danger" data-action="delete">刪除</button>
+      </td>
+    </tr>
+  </template>
+
+  <noscript><p class="noscript">請啟用 JavaScript 後重新整理。</p></noscript>
+</body>
+</html>

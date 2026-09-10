@@ -1,0 +1,36 @@
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are local Markdown under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the canonical labels `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository using root `CONTEXT.md` and `docs/adr/` when those documents exist. See `docs/agents/domain.md`.
+
+
+# 開發守則
+Do not increase architectural complexity unless strictly required by the task.
+1. 永遠優先：**簡單、精簡、快速、邊界清楚**。
+2. 使用最直接、最好懂的實作，不做過度設計。
+3. 能少一層就少一層，能少一個檔案就少一個檔案。
+4. 不建立沒有明確責任的 Wrapper、Manager、Helper、Factory。
+5. 不為未來可能需求預先增加抽象。
+6. 一個函式只做一件事，一個模組只負責一個明確領域。
+7. 模組必須低耦合，禁止循環依賴與互相修改內部狀態。
+8. 優先單向依賴，禁止跨層直接操作。
+9. 發現重複邏輯時，抽成真正可復用的共用元件。
+10. 新邏輯取代舊邏輯時，直接刪除舊實作，不保留無用兼容層。
+11. 刪除未使用的函式、變數、參數、檔案與死代碼。
+12. 避免重複計算、重複 I/O、重複查詢與不必要資料複製。
+13. 不為效能而提前增加複雜度，只優化已確認的瓶頸。
+14. 修改功能時，只改最小必要範圍，禁止順手重構無關區域。
+15. 優先 Early Return，避免深層巢狀與複雜控制流程。
+16. 命名必須直接描述用途，不使用模糊或抽象名稱。
+17. 重構後若檔案、層級、依賴或呼叫鏈明顯增加，重新檢查設計。
+18. 每次修改後確認：更簡單、更少代碼、更少依賴、邊界更清楚。
+19. 核心原則：**能刪不加、能直接不繞、能獨立不耦合。**

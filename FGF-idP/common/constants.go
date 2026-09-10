@@ -19,6 +19,14 @@ const (
 	JwtExpireSeconds = 24 * 60 * 60 * 7
 )
 
+var (
+	AccessTokenExpireSeconds   = JwtExpireSeconds
+	SessionCookieExpireSeconds = 30 * 24 * 60 * 60
+	DeviceCookieExpireSeconds  = 360 * 24 * 60 * 60
+	CookieSecure               = false
+	ActiveKeyID                = InitialKeyKID
+)
+
 const (
 	RequestIdKey = "FGF-Request-Id"
 )
@@ -30,6 +38,21 @@ const (
 	RoleCommonUser = 1
 	RoleAdminUser  = 4
 	RoleRootUser   = 6
+)
+
+// IsKnownRole 只認已定義的等級，是 admin API 唯一的角色輸入閘門。
+func IsKnownRole(level int) bool {
+	switch level {
+	case RoleGuestUser, RoleCommonUser, RoleAdminUser, RoleRootUser:
+		return true
+	}
+	return false
+}
+
+// middleware/auth.go 寫入、controller 讀取的請求身分。
+const (
+	CtxUserID = "fgf_uid"
+	CtxRole   = "fgf_role"
 )
 
 //// 到時候看看可以應用在哪裡

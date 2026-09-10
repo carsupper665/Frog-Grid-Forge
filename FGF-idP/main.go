@@ -2,36 +2,32 @@ package main
 
 import (
 	"FGF-idP/common"
-	"FGF-idP/controller"
 	"FGF-idP/middleware"
 	"FGF-idP/model"
 	"FGF-idP/router"
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"os/signal"
+	"strings"
 	"syscall"
-	"unsafe"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/mattn/go-colorable"
 )
-
-var (
-	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
-	procSetConsoleMode        = kernel32.NewProc("SetConsoleMode")
-	procGetConsoleMode        = kernel32.NewProc("GetConsoleMode")
-	EnableVTProcessing uint32 = 0x0004
-)
-
-func enableANSI() {
-	hOut := syscall.Handle(syscall.Stdout)
-	var mode uint32
-	procGetConsoleMode.Call(uintptr(hOut), uintptr(unsafe.Pointer(&mode)))
-	mode |= EnableVTProcessing
-	procSetConsoleMode.Call(uintptr(hOut), uintptr(mode))
-}
 
 func main() {
-	enableANSI()
+	defer colorable.EnableColorsStdout(nil)()
+	if err := run(); err != nil {
+		common.FatalLog(err)
+	}
+}
+
+func run() error {
 	if err := godotenv.Load(); err != nil {
 		fmt.Println("Error loading .env file")
 	}
@@ -43,7 +39,7 @@ func main() {
 	logger.Debugf("system says, Hi is me, FGF-idP, Version: %s%s, Initializing...", common.Version, common.Build)
 	common.SysLog(fmt.Sprintf("%s, Version: %s%s, Initializing...", common.SystemName, common.Version, common.Build))
 
-	if os.Getenv("DEBUG") != "true" { // gin 預設為 debug 所以要記得關
+	if !common.GetEnvOrDefaultBool("DEBUG", false) { // gin 預設為 debug 所以要記得關
 		common.SysLog(common.ColorGreen + "Running in Release Mode" + common.ColorReset)
 		gin.SetMode(gin.ReleaseMode)
 	} else {
@@ -51,10 +47,30 @@ func main() {
 	}
 
 	if err := model.InitDB(); err != nil {
-		common.FatalLog("failed to init DB: " + err.Error())
+		return fmt.Errorf("init DB: %w", err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	sqlDB, err := model.DB.DB()
+	if err != nil {
+		return fmt.Errorf("access DB connection pool: %w", err)
+	}
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		model.RunAuthCleanup(ctx)
+	}()
+	defer func() {
+		stop()
+		<-cleanupDone
+		_ = sqlDB.Close()
+	}()
+
 	server := gin.New()
+	if err := configureTrustedProxies(server); err != nil {
+		return fmt.Errorf("invalid TRUSTED_PROXIES: %w", err)
+	}
 	// CustomRecovery 這邊的作用是超大 exception 機制 如果API哪裡繃了可以防程序崩 再以json回傳問題
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		common.SysError(fmt.Sprintf("panic detected: %v", err))
@@ -70,26 +86,53 @@ func main() {
 		})
 	}))
 	middleware.SetUpLogger(server)
-	middleware.Init()
 	logger.Debug("init middleware complete")
 	router.SetRouter(server)
-	// init session store
-	// store := cookie.NewStore([]byte(common.SessionSecret))
-	// store.Options(sessions.Options{
-	//	Path:     "/",
-	//	MaxAge:   2592000, // 30 days
-	//	HttpOnly: true,
-	//	Secure:   false,
-	//	SameSite: http.SameSiteStrictMode,
-	//  })
-	// server.Use(sessions.Sessions("session", store))
-	controller.InitAuthCache()
-
+	router.SetHealthRoutes(server, sqlDB.PingContext)
 	port := common.Port
 
 	common.SysLog(fmt.Sprintf("Listening on port %d", port))
-	if err := server.Run(fmt.Sprintf(":%d", port)); err != nil {
-		common.FatalLog("failed to start server: " + err.Error())
-	}
+	return serveHTTP(ctx, newHTTPServer(fmt.Sprintf(":%d", port), server))
 
+}
+
+func configureTrustedProxies(server *gin.Engine) error {
+	var proxies []string
+	if raw := strings.TrimSpace(common.GetEnvOrDefaultString("TRUSTED_PROXIES", "")); raw != "" {
+		for _, value := range strings.Split(raw, ",") {
+			proxies = append(proxies, strings.TrimSpace(value))
+		}
+	}
+	return server.SetTrustedProxies(proxies)
+}
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
+func serveHTTP(ctx context.Context, server *http.Server) error {
+	stopped := make(chan error, 1)
+	go func() { stopped <- server.ListenAndServe() }()
+	select {
+	case err := <-stopped:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			_ = server.Close()
+			return err
+		}
+		return nil
+	}
 }

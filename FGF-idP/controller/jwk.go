@@ -21,6 +21,19 @@ type DiscoveryResponse struct {
 	// …其他想加的
 }
 
+type JWKSResponse struct {
+	Keys []JWKResponseKey `json:"keys"`
+}
+
+type JWKResponseKey struct {
+	Kid string `json:"kid"`
+	Kty string `json:"kty"`
+	Use string `json:"use"`
+	Alg string `json:"alg"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+}
+
 func buildDiscoveryResponse(meta *model.JakMetadata) *DiscoveryResponse {
 	return &DiscoveryResponse{
 		Issuer:                meta.Issuer,
@@ -33,8 +46,8 @@ func buildDiscoveryResponse(meta *model.JakMetadata) *DiscoveryResponse {
 		ResponseTypesSupported:           []string{"code"},
 		SubjectTypesSupported:            []string{"public"},
 		IDTokenSigningAlgValuesSupported: []string{"RS256"},
-		ScopesSupported:                  []string{"openid", "profile", "email", "offline_access"},
-		GrantTypesSupported:              []string{"authorization_code", "refresh_token"},
+		ScopesSupported:                  []string{"openid", "profile", "email"},
+		GrantTypesSupported:              []string{"authorization_code"},
 	}
 }
 
@@ -60,7 +73,18 @@ func JwksKeys(c *gin.Context) {
 		return
 	}
 
-	c.JSON(200, jwks)
+	keys := make([]JWKResponseKey, 0, len(jwks))
+	for _, key := range jwks {
+		keys = append(keys, JWKResponseKey{
+			Kid: key.Kid,
+			Kty: key.Kty,
+			Use: key.Use,
+			Alg: key.Alg,
+			N:   key.N,
+			E:   key.E,
+		})
+	}
+	c.JSON(200, JWKSResponse{Keys: keys})
 }
 
 func GetKeysBySid(c *gin.Context) {

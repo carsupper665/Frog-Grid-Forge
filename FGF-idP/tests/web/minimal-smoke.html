@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FGF-idP Minimal Smoke Test</title>
+  <style>
+    :root {
+      --bg-a: #f2f7ff;
+      --bg-b: #dff3ee;
+      --panel: #ffffffdd;
+      --ink: #17212f;
+      --muted: #4a5970;
+      --accent: #067a68;
+      --accent-2: #0a4fa2;
+      --line: #d3dce9;
+      --radius: 14px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Noto Sans TC", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(1200px 700px at 5% -10%, #c8e9ff 0%, transparent 65%),
+        radial-gradient(900px 500px at 100% 0%, #bff0de 0%, transparent 55%),
+        linear-gradient(160deg, var(--bg-a), var(--bg-b));
+      min-height: 100vh;
+      padding: 22px;
+    }
+
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      backdrop-filter: blur(4px);
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      letter-spacing: 0.02em;
+    }
+
+    .sub {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    @media (max-width: 760px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px;
+      font: inherit;
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+
+    .btns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 14px;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+      background: linear-gradient(120deg, var(--accent), var(--accent-2));
+    }
+
+    button.alt {
+      background: #4d607b;
+    }
+
+    pre {
+      margin: 0;
+      background: #0f1724;
+      color: #d5e0ff;
+      border-radius: 10px;
+      padding: 12px;
+      overflow: auto;
+      min-height: 260px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .hint {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="panel">
+      <h1>FGF-idP Minimal Smoke Test</h1>
+      <p class="sub">快速手動測試: discovery / auth / token / userinfo</p>
+    </section>
+
+    <section class="panel">
+      <div class="grid">
+        <div>
+          <label for="baseUrl">Backend Base URL</label>
+          <input id="baseUrl" value="http://localhost:3000" />
+        </div>
+        <div>
+          <label for="clientId">Client ID</label>
+          <input id="clientId" value="fgf-mc-panel" />
+        </div>
+        <div>
+          <label for="redirectUri">Redirect URI</label>
+          <input id="redirectUri" value="http://localhost:3000/callback" />
+        </div>
+        <div>
+          <label for="clientSecret">Client Secret (token 交換用)</label>
+          <input id="clientSecret" value="" />
+        </div>
+        <div>
+          <label for="scope">Scope</label>
+          <input id="scope" value="openid profile email" />
+        </div>
+        <div>
+          <label for="state">State</label>
+          <input id="state" value="smoke-state" />
+        </div>
+        <div>
+          <label for="authCode">Authorization Code</label>
+          <input id="authCode" placeholder="手動貼上 code" />
+        </div>
+        <div>
+          <label for="codeVerifier">Code Verifier (可選)</label>
+          <input id="codeVerifier" value="" />
+        </div>
+      </div>
+
+      <div class="btns">
+        <button id="btnDiscovery" type="button">GET Discovery</button>
+        <button id="btnAuth" type="button">Open /x/auth</button>
+        <button id="btnToken" type="button">POST /x/token</button>
+        <button id="btnUserinfo" type="button">GET /x/userinfo</button>
+        <button id="btnClear" class="alt" type="button">Clear Log</button>
+      </div>
+      <p class="hint">提示: auth 完成後若沒有回到這頁，請把 callback URL 中的 <code>code</code> 手動貼回來。</p>
+    </section>
+
+    <section class="panel">
+      <label for="accessToken">Access Token</label>
+      <textarea id="accessToken" placeholder="token 交換成功後會自動寫入"></textarea>
+      <p class="hint">Log</p>
+      <pre id="output"></pre>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const storageKey = "fgf-minimal-smoke";
+
+    function nowTs() {
+      return new Date().toISOString();
+    }
+
+    function appendLog(title, payload) {
+      const out = $("output");
+      const lines = [
+        "[" + nowTs() + "] " + title,
+        typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
+        ""
+      ];
+      out.textContent = lines.join("\n") + out.textContent;
+    }
+
+    function trimUrl(url) {
+      return url.replace(/\/+$/, "");
+    }
+
+    function getSettings() {
+      return {
+        baseUrl: trimUrl($("baseUrl").value.trim()),
+        clientId: $("clientId").value.trim(),
+        redirectUri: $("redirectUri").value.trim(),
+        clientSecret: $("clientSecret").value,
+        scope: $("scope").value.trim(),
+        state: $("state").value.trim() || "smoke-state",
+        code: $("authCode").value.trim(),
+        codeVerifier: $("codeVerifier").value.trim(),
+        accessToken: $("accessToken").value.trim()
+      };
+    }
+
+    function saveSettings() {
+      localStorage.setItem(storageKey, JSON.stringify(getSettings()));
+    }
+
+    function restoreSettings() {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        if (saved.baseUrl) $("baseUrl").value = saved.baseUrl;
+        if (saved.clientId) $("clientId").value = saved.clientId;
+        if (saved.redirectUri) $("redirectUri").value = saved.redirectUri;
+        if (saved.clientSecret !== undefined) $("clientSecret").value = saved.clientSecret;
+        if (saved.scope) $("scope").value = saved.scope;
+        if (saved.state) $("state").value = saved.state;
+        if (saved.code) $("authCode").value = saved.code;
+        if (saved.codeVerifier !== undefined) $("codeVerifier").value = saved.codeVerifier;
+        if (saved.accessToken) $("accessToken").value = saved.accessToken;
+      } catch {
+      }
+    }
+
+    function extractCodeFromQuery() {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      const state = params.get("state");
+      const err = params.get("error");
+      if (code) {
+        $("authCode").value = code;
+        appendLog("Callback code detected", { code, state: state || null });
+      }
+      if (err) {
+        appendLog("Callback error detected", { error: err, state: state || null });
+      }
+    }
+
+    async function request(url, options = {}) {
+      const resp = await fetch(url, options);
+      const text = await resp.text();
+      let body = text;
+      try {
+        body = JSON.parse(text);
+      } catch {
+      }
+      return {
+        status: resp.status,
+        url: resp.url,
+        headers: Object.fromEntries(resp.headers.entries()),
+        body
+      };
+    }
+
+    $("btnDiscovery").addEventListener("click", async () => {
+      saveSettings();
+      const s = getSettings();
+      try {
+        const res = await request(s.baseUrl + "/.well-known/openid-configuration");
+        appendLog("GET /.well-known/openid-configuration", res);
+      } catch (err) {
+        appendLog("GET discovery failed", String(err));
+      }
+    });
+
+    $("btnAuth").addEventListener("click", () => {
+      saveSettings();
+      const s = getSettings();
+      const p = new URLSearchParams({
+        response_type: "code",
+        client_id: s.clientId,
+        redirect_uri: s.redirectUri,
+        scope: s.scope,
+        state: s.state
+      });
+      const authUrl = s.baseUrl + "/x/auth?" + p.toString();
+      appendLog("Open /x/auth", authUrl);
+      window.open(authUrl, "_blank", "noopener,noreferrer");
+    });
+
+    $("btnToken").addEventListener("click", async () => {
+      saveSettings();
+      const s = getSettings();
+      if (!s.code) {
+        appendLog("POST /x/token skipped", "authorization code is empty");
+        return;
+      }
+      const form = new URLSearchParams();
+      form.set("grant_type", "authorization_code");
+      form.set("code", s.code);
+      form.set("redirect_uri", s.redirectUri);
+      form.set("client_id", s.clientId);
+      form.set("client_secret", s.clientSecret);
+      if (s.codeVerifier) {
+        form.set("code_verifier", s.codeVerifier);
+      }
+      try {
+        const res = await request(s.baseUrl + "/x/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form
+        });
+        if (res.body && typeof res.body === "object" && res.body.access_token) {
+          $("accessToken").value = res.body.access_token;
+        }
+        appendLog("POST /x/token", res);
+        saveSettings();
+      } catch (err) {
+        appendLog("POST /x/token failed", String(err));
+      }
+    });
+
+    $("btnUserinfo").addEventListener("click", async () => {
+      saveSettings();
+      const s = getSettings();
+      const headers = {};
+      if (s.accessToken) {
+        headers["Authorization"] = "Bearer " + s.accessToken;
+      }
+      try {
+        const res = await request(s.baseUrl + "/x/userinfo", { headers });
+        appendLog("GET /x/userinfo", res);
+      } catch (err) {
+        appendLog("GET /x/userinfo failed", String(err));
+      }
+    });
+
+    $("btnClear").addEventListener("click", () => {
+      $("output").textContent = "";
+    });
+
+    restoreSettings();
+    extractCodeFromQuery();
+    appendLog("Ready", "Smoke page loaded");
+  </script>
+</body>
+</html>

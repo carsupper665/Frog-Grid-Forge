@@ -1,0 +1,14 @@
+## 1. Implementation
+- [x] 1.1 Add IsKnownRole and the request identity context keys to common.
+- [x] 1.2 Share session parsing through model.SessionUserID and give GetRole a context and a not-found sentinel.
+- [x] 1.3 Add the RequireRole middleware that reads the stored level on every request.
+- [x] 1.4 Add shared list-query helpers and the user directory data access.
+- [x] 1.5 Extend the Client model with console metadata and soft delete, and honour the redirect URI verdict in ValiClient.
+- [x] 1.6 Add OAuth client data access and the startup warning for clients with an empty secret.
+- [x] 1.7 Add the admin sign-in, identity and user directory handlers with the privilege escalation guards.
+- [x] 1.8 Add the client management handlers with redirect URI validation and one-time secrets.
+- [x] 1.9 Wire the admin routes at two thresholds, without CORS.
+- [x] 1.10 Return the permission level from /x/userinfo.
+- [x] 1.11 Serve the embedded admin console and its assets under the existing strict CSP.
+- [x] 1.12 Cover the middleware, both handler groups, the embedded page and the routes with tests.
+- [x] 1.13 Document the console and its security properties in README and SECURITY-CONFIG.

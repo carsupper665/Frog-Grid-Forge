@@ -18,11 +18,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
-var Issuer = GetEnvOrDefaultString("FRONTEND_BASE_URL", "http://127.0.0.1:3000")
+var Issuer = GetEnvOrDefaultString("BACKEND_BASE_URL", "http://127.0.0.1:3000")
 var ErrKeyNotFound = errors.New("signing key not found")
 
 func GenerateHMACWithKey(key []byte, data string) string {
@@ -66,52 +66,38 @@ func GenerateDeviceIDWithIP(ip string) string {
 }
 
 func GenerateAccessToken(userID uint, clientID, scope string) (string, error) {
-	now := time.Now()
+	return signToken(userID, AccessTokenExpireSeconds, jwt.MapClaims{
+		"aud": clientID, "typ": "access", "scope": scope,
+	})
+}
 
-	// kid 未來多對公私鑰匙時會用到
-
-	claims := jwt.MapClaims{
-		"iss":   Issuer,             // 你的 IdP base URL，例如 "https://idp.fgf.local"
-		"sub":   fmt.Sprint(userID), // 使用者 ID（字串）
-		"aud":   clientID,           // target API / resource server
-		"scope": scope,              // "openid profile ..."
-		"exp":   now.Add(JwtExpireSeconds * time.Second).Unix(),
-		"iat":   now.Unix(),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	signed, err := token.SignedString(RSAPrivateKey) // 注意這裡要的是 *rsa.PrivateKey 物件，不是 PEM 字串
-	return signed, err
+func GenerateSessionToken(userID uint, username string) (string, error) {
+	return signToken(userID, SessionCookieExpireSeconds, jwt.MapClaims{
+		"user_id": fmt.Sprint(userID), "username": username, "typ": "session",
+	})
 }
 
 func GenerateIDToken(userID uint, clientID, nonce string) (string, error) {
-	if RSAPrivateKey == nil {
-		return "", fmt.Errorf("RSAPrivateKey is nil; make sure keys are initialized")
-	}
-
-	now := time.Now()
-
-	claims := jwt.MapClaims{
-		"iss": Issuer,             // IdP 的 Issuer URL
-		"sub": fmt.Sprint(userID), // 使用者 ID，要是字串
-		"aud": clientID,           // 這顆 ID Token 給哪個 client 用
-		"exp": now.Add(JwtExpireSeconds * time.Second).Unix(),
-		"iat": now.Unix(),
-		// 可以視需求加 "auth_time": authTime.Unix(),
-	}
-
-	// 如果 Auth Request 有帶 nonce，就回寫進 ID Token
+	claims := jwt.MapClaims{"aud": clientID, "typ": "id"}
 	if nonce != "" {
 		claims["nonce"] = nonce
 	}
+	return signToken(userID, AccessTokenExpireSeconds, claims)
+}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-
-	signed, err := token.SignedString(RSAPrivateKey)
-	if err != nil {
-		return "", fmt.Errorf("signing id_token failed: %w", err)
+func signToken(userID uint, lifetime int, claims jwt.MapClaims) (string, error) {
+	if RSAPrivateKey == nil {
+		return "", fmt.Errorf("RSAPrivateKey is nil; make sure keys are initialized")
 	}
-	return signed, nil
+	now := time.Now()
+	claims["jti"] = GetRandomString(32)
+	claims["iss"] = Issuer
+	claims["sub"] = fmt.Sprint(userID)
+	claims["iat"] = now.Unix()
+	claims["exp"] = now.Add(time.Duration(lifetime) * time.Second).Unix()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = ActiveKeyID
+	return token.SignedString(RSAPrivateKey)
 }
 
 // GenerateRSAKeyPair 會在當前目錄產生：
@@ -233,44 +219,37 @@ func LoadKey(privPath, pubPath string) (*rsa.PrivateKey, *rsa.PublicKey, error) 
 	return privKey, pubKey, nil
 }
 
+// GetJWTPayload checks cryptographic validity; authentication must use model.ValidateToken
+// to also enforce persisted revocations.
 func GetJWTPayload(token string) (map[string]interface{}, error) {
-	// 統一改為 RS256：只接受 RSA public key 驗證
+	if strings.ContainsAny(token, "\r\n") {
+		return nil, jwt.ErrTokenMalformed
+	}
 	if RSAPublicKey == nil {
 		return nil, fmt.Errorf("RSAPublicKey is nil; make sure keys are initialized")
 	}
-
-	parsedToken, err := jwt.Parse(token, func(parsed *jwt.Token) (interface{}, error) {
-		if parsed.Method.Alg() != jwt.SigningMethodRS256.Alg() {
-			return nil, jwt.NewValidationError("unexpected signing method", jwt.ValidationErrorSignatureInvalid)
-		}
+	parsed, err := jwt.Parse(token, func(*jwt.Token) (interface{}, error) {
 		return RSAPublicKey, nil
-	})
-
+	}, jwt.WithValidMethods([]string{"RS256"}), jwt.WithExpirationRequired(), jwt.WithIssuer(Issuer), jwt.WithStrictDecoding())
 	if err != nil {
 		return nil, err
 	}
-	if !parsedToken.Valid {
-		return nil, jwt.NewValidationError("invalid token", jwt.ValidationErrorSignatureInvalid)
+	claims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok || !parsed.Valid {
+		return nil, jwt.ErrTokenInvalidClaims
 	}
-
-	if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok {
-		payload := make(map[string]interface{})
-		for k, v := range claims {
-			payload[k] = v
-		}
-		return payload, nil
-	}
-
-	return nil, jwt.NewValidationError("invalid token claims", jwt.ValidationErrorClaimsInvalid)
+	return map[string]interface{}(claims), nil
 }
 
 type VerifyPayload struct {
+	Nonce     string `json:"nonce"`
 	UserEmail string `json:"user_email"`
 	Exp       int64  `json:"exp"` // min
 }
 
 func GenEmailSignedToken(userEmail string) (string, error) {
 	payload := VerifyPayload{
+		Nonce:     GetRandomString(32),
 		UserEmail: userEmail,
 		Exp:       time.Now().Add(5 * time.Minute).Unix(),
 	}

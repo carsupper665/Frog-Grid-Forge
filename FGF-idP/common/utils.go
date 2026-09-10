@@ -4,12 +4,12 @@ package common
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,17 +17,22 @@ import (
 )
 
 func GetRandomString(length int) string {
-	key := make([]byte, length)
-	for i := 0; i < length; i++ {
-		key[i] = keyChars[rand.Intn(len(keyChars))]
-	}
-	return string(key)
+	return randomString(length, keyChars)
 }
 
 func GetRandomIntString(length int) string {
+	return randomString(length, NumberChars)
+}
+
+func randomString(length int, alphabet string) string {
 	key := make([]byte, length)
-	for i := 0; i < length; i++ {
-		key[i] = NumberChars[rand.Intn(10)] // 只使用數字
+	limit := big.NewInt(int64(len(alphabet)))
+	for i := range key {
+		n, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			panic(fmt.Errorf("secure random generation: %w", err))
+		}
+		key[i] = alphabet[n.Int64()]
 	}
 	return string(key)
 }

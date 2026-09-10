@@ -33,5 +33,5 @@ func AuthRouter(router *gin.Engine) {
 	rootRouter.POST("/logout", controller.Logout)
 	rootRouter.POST("/token", controller.Token)
 	rootRouter.GET("/userinfo", controller.UserInfo)
-	rootRouter.POST("/revoke")
+	// rootRouter.POST("/revoke") TODO: implement revoke token endpoint
 }
