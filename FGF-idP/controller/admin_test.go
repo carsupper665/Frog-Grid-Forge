@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 const jsonContentType = "application/json"
@@ -273,6 +275,58 @@ func TestAdminAssignsGuestRole(t *testing.T) {
 	}
 }
 
+func TestAdminUserMutationsRejectStaleAuthorizationSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, targetSuffix, body string
+	}{
+		{name: "role update", method: http.MethodPatch, targetSuffix: "/role", body: `{"role":0}`},
+		{name: "delete", method: http.MethodDelete},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupAdminTest(t)
+			target := createUser(t, "raceusr", "race-password-1", common.RoleCommonUser)
+			promoted := false
+			var promoteErr error
+			callbackName := "test:promote_target_after_read"
+			if err := model.DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+				loaded, ok := tx.Statement.Dest.(*model.User)
+				if promoted || !ok || loaded.ID != target.ID {
+					return
+				}
+				promoted = true
+				promoteErr = model.DB.Model(&model.User{}).Where("id = ?", target.ID).
+					Update("role", common.RoleRootUser).Error
+			}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = model.DB.Callback().Query().Remove(callbackName)
+			})
+
+			path := fmt.Sprintf("/x/admin/users/%d%s", target.ID, tc.targetSuffix)
+			resp := adminRequest(t, env, tc.method, path, tc.body, env.user)
+			if promoteErr != nil {
+				t.Fatalf("promote target after read: %v", promoteErr)
+			}
+			if !promoted {
+				t.Fatal("test did not change the target after the authorization read")
+			}
+			if resp.Code != http.StatusConflict {
+				t.Fatalf("expected 409, got %d body=%s", resp.Code, resp.Body.String())
+			}
+			assertJSONError(t, resp, "user_changed")
+
+			saved, err := model.GetUserByID(target.ID)
+			if err != nil {
+				t.Fatalf("stale request deleted target: %v", err)
+			}
+			if saved.Role != common.RoleRootUser {
+				t.Fatalf("stale request changed promoted role to %d", saved.Role)
+			}
+		})
+	}
+}
+
 func TestAdminUpdateRoleRejectsBadInput(t *testing.T) {
 	env := setupAdminTest(t)
 	plain := createUser(t, "plain6", "plain-password-6", common.RoleCommonUser)
@@ -336,7 +390,7 @@ func TestAdminRoleChangeTakesEffectImmediately(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected 200 before demotion, got %d", resp.Code)
 	}
-	if err := model.UpdateUserRole(context.Background(), admin.ID, common.RoleCommonUser); err != nil {
+	if err := model.UpdateUserRole(context.Background(), admin, common.RoleCommonUser); err != nil {
 		t.Fatalf("demote: %v", err)
 	}
 	resp = performRequest(t, env.router, http.MethodGet, "/x/admin/me", "", "", []*http.Cookie{cookie})

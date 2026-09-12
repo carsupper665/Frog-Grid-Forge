@@ -94,6 +94,29 @@ func TestAuthRejectsInvalidScope(t *testing.T) {
 	}
 }
 
+func TestAuthRejectsScopeOutsideClientRegistration(t *testing.T) {
+	env := setupControllerTest(t)
+	if err := model.UpdateClient(context.Background(), env.clientID, map[string]any{"scope": "openid"}); err != nil {
+		t.Fatalf("restrict client scope: %v", err)
+	}
+
+	resp := performRequest(t, env.router, http.MethodGet,
+		authPath(env, "state-client-scope", "openid profile"), "", "", nil)
+	if resp.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	parsed, err := url.Parse(resp.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if parsed.Query().Get("error") != "invalid_scope" {
+		t.Fatalf("expected invalid_scope redirect, got %q", resp.Header().Get("Location"))
+	}
+	if parsed.Query().Get("state") != "state-client-scope" {
+		t.Fatalf("expected state to round-trip, got %q", resp.Header().Get("Location"))
+	}
+}
+
 func TestAuthDirectCodeWithValidSessionAndTrustedDevice(t *testing.T) {
 	env := setupControllerTest(t)
 	if err := model.SaveDevice(env.deviceID, "go-test", "127.0.0.1", env.user.ID); err != nil {
@@ -440,7 +463,7 @@ func TestTokenReturnsTokensForValidAuthorizationCode(t *testing.T) {
 			t.Fatalf("expected %q in token response: %v", key, data)
 		}
 	}
-	if data["scope"] != "openid profile" {
+	if data["scope"] != "openid profile email" {
 		t.Fatalf("expected scope to round-trip, got %#v", data["scope"])
 	}
 	if _, ok := data["refresh_token"]; ok {
@@ -454,6 +477,19 @@ func TestTokenReturnsTokensForValidAuthorizationCode(t *testing.T) {
 	}
 	if !authCode.IsUsed {
 		t.Fatal("expected auth code to be marked used")
+	}
+
+	userInfo := performRequestWithHeaders(t, env.router, http.MethodGet, "/x/userinfo", "", "", nil, map[string]string{
+		"Authorization": "Bearer " + data["access_token"].(string),
+	})
+	if userInfo.Code != http.StatusOK {
+		t.Fatalf("expected userinfo 200, got %d body=%s", userInfo.Code, userInfo.Body.String())
+	}
+	claims := decodeJSONMap(t, userInfo)
+	for _, claim := range []string{"sub", "email", "name", "preferred_username", "role"} {
+		if _, ok := claims[claim]; !ok {
+			t.Fatalf("full authorization omitted %q: %v", claim, claims)
+		}
 	}
 }
 
@@ -476,6 +512,68 @@ func TestUserInfoReturnsClaimsForValidAccessToken(t *testing.T) {
 	}
 	if data["preferred_username"] != env.user.Username {
 		t.Fatalf("expected preferred_username, got %v", data)
+	}
+}
+
+func TestUserInfoLimitsClaimsToGrantedScopes(t *testing.T) {
+	env := setupControllerTest(t)
+	for _, tc := range []struct {
+		name     string
+		scope    string
+		expected map[string]any
+	}{
+		{
+			name:  "openid only",
+			scope: "openid",
+			expected: map[string]any{
+				"sub": fmt.Sprint(env.user.ID),
+			},
+		},
+		{
+			name:  "email",
+			scope: "openid email",
+			expected: map[string]any{
+				"sub": fmt.Sprint(env.user.ID), "email": env.user.Email,
+			},
+		},
+		{
+			name:  "profile",
+			scope: "openid profile",
+			expected: map[string]any{
+				"sub": fmt.Sprint(env.user.ID), "name": env.user.DisplayName,
+				"preferred_username": env.user.Username, "role": float64(env.user.Role),
+			},
+		},
+		{
+			name:  "profile and email",
+			scope: "openid profile email",
+			expected: map[string]any{
+				"sub": fmt.Sprint(env.user.ID), "email": env.user.Email, "name": env.user.DisplayName,
+				"preferred_username": env.user.Username, "role": float64(env.user.Role),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			accessToken, err := common.GenerateAccessToken(env.user.ID, env.clientID, tc.scope)
+			if err != nil {
+				t.Fatalf("generate access token: %v", err)
+			}
+			resp := performRequestWithHeaders(t, env.router, http.MethodGet, "/x/userinfo", "", "", nil, map[string]string{
+				"Authorization": "Bearer " + accessToken,
+			})
+			if resp.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
+			}
+			data := decodeJSONMap(t, resp)
+			if len(data) != len(tc.expected) {
+				t.Fatalf("unexpected claims for %q: %v", tc.scope, data)
+			}
+			for claim, expected := range tc.expected {
+				if data[claim] != expected {
+					t.Fatalf("claim %q = %#v, want %#v; claims=%v", claim, data[claim], expected, data)
+				}
+			}
+		})
 	}
 }
 
@@ -710,7 +808,7 @@ func authPath(env *controllerTestEnv, state, scope string) string {
 
 func startAuthorization(t *testing.T, env *controllerTestEnv, state string) string {
 	t.Helper()
-	resp := performRequest(t, env.router, http.MethodGet, authPath(env, state, "openid profile"), "", "", nil)
+	resp := performRequest(t, env.router, http.MethodGet, authPath(env, state, "openid profile email"), "", "", nil)
 	if resp.Code != http.StatusFound {
 		t.Fatalf("expected 302, got %d body=%s", resp.Code, resp.Body.String())
 	}

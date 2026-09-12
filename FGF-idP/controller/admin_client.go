@@ -250,6 +250,10 @@ func AdminUpdateClient(c *gin.Context) {
 // AdminRotateClientSecret issues a replacement secret, returned once.
 func AdminRotateClientSecret(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
+	if !wantsJSON(c) {
+		fail(c, http.StatusUnsupportedMediaType, "unsupported_media_type")
+		return
+	}
 	secret, hash, err := newClientSecret()
 	if err != nil {
 		common.LogError(c.Request.Context(), "admin client secret: "+err.Error())

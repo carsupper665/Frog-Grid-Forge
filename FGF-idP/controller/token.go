@@ -111,13 +111,16 @@ func UserInfo(c *gin.Context) {
 	if name == "" {
 		name = user.Username
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"sub":                sub,
-		"email":              user.Email,
-		"name":               name,
-		"preferred_username": user.Username,
-		"role":               user.Role,
-	})
+	claims := gin.H{"sub": sub}
+	if scopeIncludes(scope, "email") {
+		claims["email"] = user.Email
+	}
+	if scopeIncludes(scope, "profile") {
+		claims["name"] = name
+		claims["preferred_username"] = user.Username
+		claims["role"] = user.Role
+	}
+	c.JSON(http.StatusOK, claims)
 }
 
 func unauthorizedUserInfo(c *gin.Context) {
