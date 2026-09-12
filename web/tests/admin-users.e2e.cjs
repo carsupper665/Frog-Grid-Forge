@@ -22,7 +22,14 @@ const email = username + '@example.test';
     await page.goto(info.idp + '/admin');
     await page.getByLabel('帳號 / Email', { exact: true }).fill(info.username);
     await page.getByLabel('密碼', { exact: true }).fill(info.password);
+    const before = (await fetch(info.mailbox + '/messages').then(r => r.json())).length;
     await page.getByRole('button', { name: '登入', exact: true }).click();
+    // A fresh browser context is an unverified device: the console sends a link to the local mailbox.
+    await page.locator('#signin-feedback.notice').waitFor();
+    let mail = []; for (let i = 0; i < 40 && mail.length <= before; i++) { mail = await fetch(info.mailbox + '/messages').then(r => r.json()); if (mail.length <= before) await new Promise(r => setTimeout(r, 200)); }
+    const link = mail.at(-1)?.match(/http:\/\/127\.0\.0\.1:15525\/x\/verify\?t=[A-Za-z0-9._~%+-]+/);
+    assert(link, 'console verification email missing');
+    await page.goto(link[0]);
     await page.getByRole('button', { name: '新增使用者', exact: true }).waitFor();
     const rootRow = page.locator('#user-rows tr').filter({ hasText: info.username });
     assert(await rootRow.getByRole('button', { name: '編輯', exact: true }).isDisabled());

@@ -93,6 +93,13 @@ async function main() {
   const admin = await fetch(base+'/x/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account:'fgf-local',password})});
   if(!admin.ok) throw new Error(`IDP bootstrap login: ${admin.status}`);
   const cookie = admin.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ');
+  if(admin.status===203) {
+    // The console also verifies a first device by email; the root's link arrives in the local mailbox.
+    let link;for(let i=0;i<20&&!link;i++){link=mail.at(-1)?.match(/http:\/\/127\.0\.0\.1:15525\/x\/verify\?t=[A-Za-z0-9._~%+-]+/);if(!link)await new Promise(r=>setTimeout(r,100));}
+    if(!link) throw new Error('IDP bootstrap: verification email missing');
+    const verified = await fetch(link[0],{headers:{Cookie:cookie},redirect:'manual'});
+    if(verified.status!==303) throw new Error(`IDP bootstrap verify: ${verified.status}`);
+  }
   const profile=await fetch(base+'/x/admin/me',{headers:{Cookie:cookie}}).then(r=>r.json());
   for(const svc of services) {
     const response = await fetch(base+'/x/admin/clients',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({client_id:`fgf-${svc.name}`,name:svc.name,redirect_uris:[svc.url+svc.callback],scope:'openid profile email'})});

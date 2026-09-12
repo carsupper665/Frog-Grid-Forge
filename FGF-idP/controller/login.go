@@ -92,7 +92,7 @@ func findLoginUser(email, username string) (model.User, error) {
 }
 
 func respondDeviceVerification(c *gin.Context, user model.User, authReq *model.AuthRequest, deviceID, message string) {
-	if err := CreateVerificationToken(c, user, authReq.ID, deviceID); err != nil {
+	if err := CreateVerificationToken(c, user, authReq, deviceID); err != nil {
 		common.LogError(c.Request.Context(), "CreateVerificationToken error: "+err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 		return

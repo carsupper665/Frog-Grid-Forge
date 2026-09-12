@@ -206,7 +206,7 @@ func TestAdminRotateClientSecretRejectsNonJSONWithoutChangingSecret(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := performRequest(t, env.router, http.MethodPost, "/x/admin/clients/svc-no-form-rotate/secret",
-				tc.body, tc.contentType, []*http.Cookie{cookieFor(t, env.user)})
+				tc.body, tc.contentType, cookieFor(t, env.user))
 			if resp.Code != http.StatusUnsupportedMediaType {
 				t.Fatalf("expected 415, got %d body=%s", resp.Code, resp.Body.String())
 			}

@@ -251,7 +251,7 @@ func GenEmailSignedToken(userEmail string) (string, error) {
 	payload := VerifyPayload{
 		Nonce:     GetRandomString(32),
 		UserEmail: userEmail,
-		Exp:       time.Now().Add(5 * time.Minute).Unix(),
+		Exp:       time.Now().Add(EmailTokenTTL).Unix(),
 	}
 	data, _ := json.Marshal(payload)
 	key := []byte(CryptoSecret)

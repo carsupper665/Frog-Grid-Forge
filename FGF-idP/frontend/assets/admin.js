@@ -145,11 +145,20 @@ signinForm.addEventListener("submit", async (event) => {
   signinFields.disabled = true;
   signinLabel.textContent = "正在登入…";
   signinFeedback.hidden = true;
+  signinFeedback.classList.remove("notice");
   try {
     const result = await api("/x/admin/login", {
       method: "POST",
       body: { account: el("account").value.trim(), password: el("password").value },
     });
+    if (result.status === 203) {
+      const email = String(result.body.email || "");
+      const separator = email.indexOf("@");
+      const masked = separator > 0 ? email[0] + "•••" + email.slice(separator) : "你的信箱";
+      signinFeedback.classList.add("notice");
+      signinFeedback.textContent = "這是沒見過的裝置。驗證連結已寄到 " + masked + "，請使用同一瀏覽器開啟信件連結，完成後會回到後台。";
+      return;
+    }
     if (result.ok) {
       el("password").value = "";
       me = result.body;

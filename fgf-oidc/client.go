@@ -103,6 +103,7 @@ type Identity struct {
 	Email    string `json:"email"`
 	Name     string `json:"name"`
 	Username string `json:"preferred_username"`
+	Role     int    `json:"role"`
 }
 
 func randomValue() (string, error) {

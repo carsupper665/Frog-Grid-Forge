@@ -68,9 +68,9 @@ ChainTrace 的 Cloudflare 本機 Worker 不會預設繼承 shell 的所有環境
 
 各服務 UI 與 IDP 後台的登入者標籤優先顯示 display name，未設定時才使用帳號名稱。MC 的既有登入狀態會在重新整理時從受保護的 `/user/me` 取得顯示資料。IDP 改名後，再次透過 FGF 登入會更新 MC／ChainTrace 的顯示名稱及 Trading session 的名稱，不變更帳號 ID、Email 關聯或權限。
 
-MC 與 ChainTrace 以 issuer 和 subject 的 SHA-256 值保存在 `users.fgf_subject`，新增欄位由既有 GORM migration 處理。新 FGF 帳號預設 role 1，IDP 的 root/admin 角色不會自動變成服務管理員。服務本機密碼登入仍保留，但 FGF 新建帳號不具有可用的本機密碼。
+MC 與 ChainTrace 以 issuer 和 subject 的 SHA-256 值保存在 `users.fgf_subject`，新增欄位由既有 GORM migration 處理。每次 FGF 登入都以 IDP 為準同步 role 與顯示名稱：IDP 的 root（6）在 MC／ChainTrace 也是 root，admin（4）在兩個服務中沒有對應的特殊權限，等同一般使用者；在服務端手動調整過的 role 會在下次 FGF 登入時被 IDP 的值覆蓋。服務本機密碼登入仍保留，但 FGF 新建帳號不具有可用的本機密碼。
 
-不會只因 email 相同就把 FGF 身分附加到既有本機帳號。若有同 email 的舊帳號或已刪除的身分佔用唯一鍵，登入會拒絕並要求管理員先處理帳號關聯；既有帳號與資料不會被覆寫。`Config.IdentityKey(sub)` 提供相同的穩定關聯值，管理員可在確認身分後進行一次性資料遷移。登入原有資料的需求應以這種明確關聯處理，不要刪除舊帳號。
+FGF 登入依序比對：已關聯的 `fgf_subject`、相同 email 的既有本機帳號（此時寫入關聯，帳號名稱、資料與密碼登入保留）、都沒有才建立新帳號。因為 IDP 的 email 只能由 IDP 管理員設定，等於 IDP 管理員能決定任何 email 對應到哪個服務帳號；只有已軟刪除的帳號仍佔用唯一鍵時登入才會被拒，需管理員先處理。
 
 服務登出清除／撤銷的是各服務 session；FGF IDP session 與裝置信任仍保留，因此再次點 FGF logo 可能直接登入。這不是跨所有服務的全域登出。
 

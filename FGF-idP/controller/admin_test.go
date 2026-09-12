@@ -63,18 +63,24 @@ func createUser(t *testing.T, name, password string, role int) model.User {
 	return user
 }
 
-func cookieFor(t *testing.T, user model.User) *http.Cookie {
+// cookieFor returns a session cookie plus a device cookie the user has
+// verified, which is what the console gate demands of every request.
+func cookieFor(t *testing.T, user model.User) []*http.Cookie {
 	t.Helper()
 	token, err := common.GenerateSessionToken(user.ID, user.Username)
 	if err != nil {
 		t.Fatalf("generate session token: %v", err)
 	}
-	return &http.Cookie{Name: common.JwtCookieName, Value: token}
+	deviceID := "trusted-" + user.Username
+	if err := model.SaveDevice(deviceID, "test-browser", "127.0.0.1", user.ID); err != nil {
+		t.Fatalf("trust device: %v", err)
+	}
+	return []*http.Cookie{{Name: common.JwtCookieName, Value: token}, {Name: common.DeviceCookieName, Value: deviceID}}
 }
 
 func adminRequest(t *testing.T, env *controllerTestEnv, method, target, body string, user model.User) *httptest.ResponseRecorder {
 	t.Helper()
-	return performRequest(t, env.router, method, target, body, jsonContentType, []*http.Cookie{cookieFor(t, user)})
+	return performRequest(t, env.router, method, target, body, jsonContentType, cookieFor(t, user))
 }
 
 // TestAdminLoginFailuresAreIndistinguishable is the account enumeration guard:
@@ -113,7 +119,7 @@ func TestAdminLoginFailuresAreIndistinguishable(t *testing.T) {
 func TestAdminLoginSucceedsForRoot(t *testing.T) {
 	env := setupAdminTest(t)
 	body := fmt.Sprintf(`{"account":%q,"password":%q}`, env.username, env.password)
-	resp := performRequest(t, env.router, http.MethodPost, "/x/admin/login", body, jsonContentType, nil)
+	resp := performRequest(t, env.router, http.MethodPost, "/x/admin/login", body, jsonContentType, []*http.Cookie{cookieFor(t, env.user)[1]})
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
 	}
@@ -122,6 +128,54 @@ func TestAdminLoginSucceedsForRoot(t *testing.T) {
 	}
 	if role, _ := decodeJSONMap(t, resp)["role"].(float64); int(role) != common.RoleRootUser {
 		t.Fatalf("expected root role in body, got %s", resp.Body.String())
+	}
+}
+
+// TestAdminLoginVerifiesNewDeviceByEmail: a correct password on an unknown
+// device only earns a verification link. The console stays closed until the
+// link is opened in the same browser, and then it lands on /admin.
+func TestAdminLoginVerifiesNewDeviceByEmail(t *testing.T) {
+	env := setupAdminTest(t)
+	body := fmt.Sprintf(`{"account":%q,"password":%q}`, env.username, env.password)
+	resp := performRequest(t, env.router, http.MethodPost, "/x/admin/login", body, jsonContentType, nil)
+	if resp.Code != http.StatusNonAuthoritativeInfo {
+		t.Fatalf("expected 203, got %d body=%s", resp.Code, resp.Body.String())
+	}
+	if email, _ := decodeJSONMap(t, resp)["email"].(string); email != env.user.Email {
+		t.Fatalf("expected the masked-later email in body, got %s", resp.Body.String())
+	}
+	deviceID, ok := setCookieValue(resp, common.DeviceCookieName)
+	if !ok {
+		t.Fatal("expected a device cookie")
+	}
+	session, ok := setCookieValue(resp, common.JwtCookieName)
+	if !ok {
+		t.Fatal("expected a session cookie")
+	}
+	cookies := []*http.Cookie{{Name: common.JwtCookieName, Value: session}, {Name: common.DeviceCookieName, Value: deviceID}}
+	if resp := performRequest(t, env.router, http.MethodGet, "/x/admin/me", "", "", cookies); resp.Code != http.StatusUnauthorized {
+		t.Fatalf("console opened before verification: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var pending model.AuthRequest
+	if err := model.DB.Where("email_verify_user_id = ? AND email_verify_device_id = ?", env.user.ID, deviceID).First(&pending).Error; err != nil {
+		t.Fatalf("no verification bound to the new device: %v", err)
+	}
+	if pending.ClientID != common.AdminConsoleClientID {
+		t.Fatalf("verification bound to client %q, want the console marker", pending.ClientID)
+	}
+	verify := performRequest(t, env.router, http.MethodGet, "/x/verify?t="+url.QueryEscape(*pending.EmailVerifyToken), "", "", []*http.Cookie{cookies[1]})
+	if verify.Code != http.StatusSeeOther || verify.Header().Get("Location") != "/admin" {
+		t.Fatalf("expected redirect to /admin, got %d %s", verify.Code, verify.Header().Get("Location"))
+	}
+	if _, err := model.GetAuthCode(context.Background(), ""); err == nil {
+		t.Fatal("console verification must not issue an OAuth code")
+	}
+	if resp := performRequest(t, env.router, http.MethodGet, "/x/admin/me", "", "", cookies); resp.Code != http.StatusOK {
+		t.Fatalf("console closed after verification: %d body=%s", resp.Code, resp.Body.String())
+	}
+	if resp := performRequest(t, env.router, http.MethodPost, "/x/admin/login", body, jsonContentType, []*http.Cookie{cookies[1]}); resp.Code != http.StatusOK {
+		t.Fatalf("verified device should sign in directly: %d body=%s", resp.Code, resp.Body.String())
 	}
 }
 
@@ -345,7 +399,7 @@ func TestAdminUpdateRoleRejectsBadInput(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := performRequest(t, env.router, http.MethodPatch, tc.target, tc.body, tc.contentType,
-				[]*http.Cookie{cookieFor(t, env.user)})
+				cookieFor(t, env.user))
 			if resp.Code != tc.status {
 				t.Fatalf("expected %d, got %d body=%s", tc.status, resp.Code, resp.Body.String())
 			}
@@ -384,16 +438,16 @@ func TestAdminDeleteUserRevokesAccess(t *testing.T) {
 func TestAdminRoleChangeTakesEffectImmediately(t *testing.T) {
 	env := setupAdminTest(t)
 	admin := createUser(t, "admin5", "admin-password-5", common.RoleAdminUser)
-	cookie := cookieFor(t, admin)
+	cookies := cookieFor(t, admin)
 
-	resp := performRequest(t, env.router, http.MethodGet, "/x/admin/me", "", "", []*http.Cookie{cookie})
+	resp := performRequest(t, env.router, http.MethodGet, "/x/admin/me", "", "", cookies)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected 200 before demotion, got %d", resp.Code)
 	}
 	if err := model.UpdateUserRole(context.Background(), admin, common.RoleCommonUser); err != nil {
 		t.Fatalf("demote: %v", err)
 	}
-	resp = performRequest(t, env.router, http.MethodGet, "/x/admin/me", "", "", []*http.Cookie{cookie})
+	resp = performRequest(t, env.router, http.MethodGet, "/x/admin/me", "", "", cookies)
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("demoted admin kept access with the same cookie: %d body=%s", resp.Code, resp.Body.String())
 	}
