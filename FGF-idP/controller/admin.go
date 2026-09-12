@@ -210,9 +210,8 @@ func AdminUpdateUserRole(c *gin.Context) {
 		fail(c, http.StatusForbidden, "forbidden_grant")
 		return
 	}
-	if err := model.UpdateUserRole(c.Request.Context(), targetID, *req.Role); err != nil {
-		common.LogError(c.Request.Context(), "admin update role: "+err.Error())
-		fail(c, http.StatusInternalServerError, "server_error")
+	if err := model.UpdateUserRole(c.Request.Context(), target, *req.Role); err != nil {
+		adminUserWriteError(c, err)
 		return
 	}
 	common.LogInfo(c.Request.Context(), "admin role change: actor="+
@@ -238,9 +237,8 @@ func AdminDeleteUser(c *gin.Context) {
 		fail(c, http.StatusForbidden, code)
 		return
 	}
-	if err := model.DeleteUser(c.Request.Context(), targetID); err != nil {
-		common.LogError(c.Request.Context(), "admin delete user: "+err.Error())
-		fail(c, http.StatusInternalServerError, "server_error")
+	if err := model.DeleteUser(c.Request.Context(), target); err != nil {
+		adminUserWriteError(c, err)
 		return
 	}
 	common.LogInfo(c.Request.Context(), "admin delete user: actor="+

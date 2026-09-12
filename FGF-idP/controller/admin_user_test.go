@@ -97,7 +97,7 @@ func TestAdminUserCreateValidationAndConflicts(t *testing.T) {
 			t.Fatalf("duplicate: %d %s", result.Code, result.Body.String())
 		}
 	}
-	if err := model.DeleteUser(context.Background(), existing.ID); err != nil {
+	if err := model.DeleteUser(context.Background(), existing); err != nil {
 		t.Fatal(err)
 	}
 	valid["username"], valid["email"] = "existing", "existing@example.com"
@@ -210,7 +210,7 @@ func TestAdminUserEditConflictLeavesDataUnchanged(t *testing.T) {
 		t.Fatal("partial update on conflict")
 	}
 	previous := second
-	if err := model.UpdateUserRole(context.Background(), second.ID, 6); err != nil {
+	if err := model.UpdateUserRole(context.Background(), second, 6); err != nil {
 		t.Fatal(err)
 	}
 	second.DisplayName = "stale edit"

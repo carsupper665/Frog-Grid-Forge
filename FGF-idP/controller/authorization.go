@@ -72,6 +72,19 @@ func isValidOIDCScope(scope string) bool {
 	return hasOpenID
 }
 
+func scopeIsSubset(scope, registered string) bool {
+	allowed := make(map[string]bool)
+	for _, item := range strings.Fields(registered) {
+		allowed[item] = true
+	}
+	for _, item := range strings.Fields(scope) {
+		if !allowed[item] {
+			return false
+		}
+	}
+	return true
+}
+
 func Auth(c *gin.Context) {
 	responseType := c.Query("response_type")
 	clientID := c.Query("client_id")
@@ -95,7 +108,13 @@ func Auth(c *gin.Context) {
 		redirectWithAuthError(c, redirectURI, "unsupported_response_type", state)
 		return
 	}
-	if !isValidOIDCScope(scope) {
+	client, err := model.GetClient(c.Request.Context(), clientID)
+	if err != nil {
+		common.LogError(c.Request.Context(), "Auth client scope lookup: "+err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal_error", "req_id": c.Request.Context().Value(common.RequestIdKey)})
+		return
+	}
+	if !isValidOIDCScope(scope) || !scopeIsSubset(scope, client.Scope) {
 		redirectWithAuthError(c, redirectURI, "invalid_scope", state)
 		return
 	}

@@ -189,17 +189,22 @@ func ListUsers(ctx context.Context, search string, page, size int) ([]User, bool
 	return users, hasMore, nil
 }
 
-// UpdateUserRole sets a live user's permission level. Callers must have already
-// authorized the change; this performs no privilege checks.
+// UpdateUserRole sets a live user's permission level only if the authorization
+// snapshot is still current.
 // Update with a single column is required: Updates(struct) would silently skip
 // RoleGuestUser because it is the zero value.
-func UpdateUserRole(ctx context.Context, userID uint, role int) error {
-	return requireOneRow(DB.WithContext(ctx).Model(&User{}).Where("id = ?", userID).Update("role", role))
+func UpdateUserRole(ctx context.Context, previous User, role int) error {
+	return requireOneRow(DB.WithContext(ctx).Model(&User{}).
+		Where("id = ? AND role = ? AND updated_at = ?", previous.ID, previous.Role, previous.UpdatedAt).
+		Update("role", role))
 }
 
-// DeleteUser soft deletes a user. Authorization is the caller's responsibility.
-func DeleteUser(ctx context.Context, userID uint) error {
-	return requireOneRow(DB.WithContext(ctx).Where("id = ?", userID).Delete(&User{}))
+// DeleteUser soft deletes a user only if the authorization snapshot is still
+// current.
+func DeleteUser(ctx context.Context, previous User) error {
+	return requireOneRow(DB.WithContext(ctx).
+		Where("id = ? AND role = ? AND updated_at = ?", previous.ID, previous.Role, previous.UpdatedAt).
+		Delete(&User{}))
 }
 
 var ErrUserIdentityExists = errors.New("username or email already exists")

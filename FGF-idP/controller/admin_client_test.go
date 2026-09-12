@@ -193,6 +193,33 @@ func TestAdminRotateClientSecretInvalidatesTheOldOne(t *testing.T) {
 	}
 }
 
+func TestAdminRotateClientSecretRejectsNonJSONWithoutChangingSecret(t *testing.T) {
+	env := setupAdminTest(t)
+	resp := adminRequest(t, env, http.MethodPost, "/x/admin/clients", createClientBody("svc-no-form-rotate"), env.user)
+	oldSecret, _ := decodeJSONMap(t, resp)["client_secret"].(string)
+
+	for _, tc := range []struct {
+		name, body, contentType string
+	}{
+		{name: "form", body: "rotate=true", contentType: "application/x-www-form-urlencoded"},
+		{name: "text", body: "rotate", contentType: "text/plain"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := performRequest(t, env.router, http.MethodPost, "/x/admin/clients/svc-no-form-rotate/secret",
+				tc.body, tc.contentType, []*http.Cookie{cookieFor(t, env.user)})
+			if resp.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("expected 415, got %d body=%s", resp.Code, resp.Body.String())
+			}
+			assertJSONError(t, resp, "unsupported_media_type")
+
+			ok, msg, err := model.ValiClient("svc-no-form-rotate", "https://app.example.com/cb", oldSecret)
+			if err != nil || !ok {
+				t.Fatalf("rejected request changed the secret: ok=%v msg=%q err=%v", ok, msg, err)
+			}
+		})
+	}
+}
+
 func TestAdminUpdateAndDeleteClient(t *testing.T) {
 	env := setupAdminTest(t)
 	if resp := adminRequest(t, env, http.MethodPost, "/x/admin/clients", createClientBody("svc-del"), env.user); resp.Code != http.StatusCreated {
