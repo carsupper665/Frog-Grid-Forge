@@ -139,7 +139,7 @@ func TestAdminUserCRUDPermissions(t *testing.T) {
 		if method == "PATCH" {
 			path += fmt.Sprintf("/%d", plain.ID)
 		}
-		result := performRequest(t, env.router, method, path, `{}`, "text/plain", []*http.Cookie{cookieFor(t, env.user)})
+		result := performRequest(t, env.router, method, path, `{}`, "text/plain", cookieFor(t, env.user))
 		if result.Code != 415 {
 			t.Fatal("non-JSON mutation accepted", method, result.Code)
 		}

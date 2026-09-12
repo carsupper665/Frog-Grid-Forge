@@ -118,6 +118,29 @@ func AdminLogin(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "server_error")
 		return
 	}
+	// A session alone never opens the console: RequireRole also demands a
+	// device this user has verified by email, exactly like the OAuth flow.
+	deviceID, err := c.Cookie(common.DeviceCookieName)
+	if errors.Is(err, http.ErrNoCookie) {
+		deviceID = common.GetRandomString(32)
+		setCookie(c, common.DeviceCookieName, deviceID, common.DeviceCookieExpireSeconds)
+	}
+	trusted, err := model.IsTrustedDevice(user.ID, deviceID)
+	if err != nil {
+		common.LogError(c.Request.Context(), "admin login device check: "+err.Error())
+		fail(c, http.StatusInternalServerError, "server_error")
+		return
+	}
+	if !trusted {
+		authReq := &model.AuthRequest{ID: c.Request.Context().Value(common.RequestIdKey).(string), ClientID: common.AdminConsoleClientID}
+		if err := model.CreateAuthRequest(c.Request.Context(), authReq); err != nil {
+			common.LogError(c.Request.Context(), "admin login verification request: "+err.Error())
+			fail(c, http.StatusInternalServerError, "server_error")
+			return
+		}
+		respondDeviceVerification(c, user, authReq, deviceID, "device_verification_required, verify link sent to email")
+		return
+	}
 	common.LogInfo(c.Request.Context(), "admin sign-in: "+user.Username)
 	c.JSON(http.StatusOK, gin.H{"id": user.ID, "username": user.Username, "display_name": user.DisplayName, "role": user.Role})
 }

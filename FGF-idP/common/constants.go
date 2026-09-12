@@ -2,6 +2,7 @@ package common
 
 import (
 	"crypto/rsa"
+	"time"
 )
 
 // ./common/constants.go
@@ -17,6 +18,12 @@ const (
 	JwtCookieName    = "au4ul4"
 	DeviceCookieName = "did"
 	JwtExpireSeconds = 24 * 60 * 60 * 7
+	// AdminConsoleClientID marks an auth request that belongs to the admin
+	// console sign-in rather than an OAuth client. "@" is outside the client ID
+	// character set, so no registered client can ever collide with it.
+	AdminConsoleClientID = "@admin"
+	// EmailTokenTTL bounds a device verification link.
+	EmailTokenTTL = 5 * time.Minute
 )
 
 var (

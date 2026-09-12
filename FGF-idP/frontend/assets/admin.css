@@ -68,6 +68,7 @@ textarea:focus-visible { outline: none; border-color: #c8bfff; box-shadow: 0 0 0
 #feedback { margin: 0 0 22px; padding: 12px 14px; border-left: 2px solid #a99be9; color: #e0daff; background: #9184d91f; font-size: 13px; line-height: 1.7; }
 #feedback.error { border-left-color: #d6a1ac; color: #ffe0e5; background: #39283170; }
 #signin-feedback { padding: 12px 14px; border-left: 2px solid #d6a1ac; color: #ffe0e5; background: #39283170; font-size: 13px; line-height: 1.7; margin: 22px 0 0; }
+#signin-feedback.notice { border-left-color: #a99be9; color: #e0daff; background: #9184d91f; }
 #signin { max-width: 500px; justify-self: center; }
 
 @media (max-width: 960px) {

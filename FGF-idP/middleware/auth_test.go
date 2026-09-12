@@ -28,7 +28,7 @@ func setupAuthTest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.User{}, &model.RevokedToken{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.UserDevice{}, &model.RevokedToken{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 
@@ -63,6 +63,16 @@ func sessionToken(t *testing.T, user model.User) string {
 	return token
 }
 
+// trustedDevice records a device the user has verified and returns its cookie value.
+func trustedDevice(t *testing.T, user model.User) string {
+	t.Helper()
+	deviceID := "dev-" + user.Username
+	if err := model.SaveDevice(deviceID, "test-browser", "127.0.0.1", user.ID); err != nil {
+		t.Fatalf("trust device: %v", err)
+	}
+	return deviceID
+}
+
 // guardedRouter mounts the gates under test and reports what the handler saw.
 func guardedRouter(thresholds ...int) (*gin.Engine, *actorSeen) {
 	seen := &actorSeen{}
@@ -84,10 +94,13 @@ type actorSeen struct {
 	hasUserID, hasRole bool
 }
 
-func callGuarded(router *gin.Engine, token string) *httptest.ResponseRecorder {
+func callGuarded(router *gin.Engine, token, device string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodGet, "/guarded", nil)
 	if token != "" {
 		request.AddCookie(&http.Cookie{Name: common.JwtCookieName, Value: token})
+	}
+	if device != "" {
+		request.AddCookie(&http.Cookie{Name: common.DeviceCookieName, Value: device})
 	}
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -112,10 +125,29 @@ func TestRequireRoleRejectsBadSessions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			router, _ := guardedRouter(common.RoleAdminUser)
-			if resp := callGuarded(router, tc.token); resp.Code != http.StatusUnauthorized {
+			if resp := callGuarded(router, tc.token, ""); resp.Code != http.StatusUnauthorized {
 				t.Fatalf("expected 401, got %d body=%s", resp.Code, resp.Body.String())
 			}
 		})
+	}
+}
+
+// TestRequireRoleDemandsVerifiedDevice: the password alone (a valid session)
+// never opens the console. The device cookie must be one this user verified
+// by email; another user's verified device does not count.
+func TestRequireRoleDemandsVerifiedDevice(t *testing.T) {
+	setupAuthTest(t)
+	user := addAuthUser(t, "auth-dev", common.RoleRootUser)
+	other := addAuthUser(t, "auth-dev2", common.RoleRootUser)
+	router, _ := guardedRouter(common.RoleAdminUser)
+	for name, device := range map[string]string{"no device cookie": "", "unknown device": "never-verified", "other user's device": trustedDevice(t, other)} {
+		resp := callGuarded(router, sessionToken(t, user), device)
+		if resp.Code != http.StatusUnauthorized || resp.Body.String() != `{"error":"device_verification_required"}` {
+			t.Fatalf("%s: expected 401 device_verification_required, got %d body=%s", name, resp.Code, resp.Body.String())
+		}
+	}
+	if resp := callGuarded(router, sessionToken(t, user), trustedDevice(t, user)); resp.Code != http.StatusOK {
+		t.Fatalf("verified device rejected: %d body=%s", resp.Code, resp.Body.String())
 	}
 }
 
@@ -124,7 +156,7 @@ func TestRequireRolePublishesIdentity(t *testing.T) {
 	user := addAuthUser(t, "auth-root", common.RoleRootUser)
 
 	router, seen := guardedRouter(common.RoleAdminUser)
-	if resp := callGuarded(router, sessionToken(t, user)); resp.Code != http.StatusOK {
+	if resp := callGuarded(router, sessionToken(t, user), trustedDevice(t, user)); resp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
 	}
 	id, ok := seen.userID.(uint)
@@ -143,10 +175,10 @@ func TestRequireRoleEnforcesThreshold(t *testing.T) {
 	admin := addAuthUser(t, "auth-adm2", common.RoleAdminUser)
 
 	router, _ := guardedRouter(common.RoleAdminUser)
-	if resp := callGuarded(router, sessionToken(t, common1)); resp.Code != http.StatusForbidden {
+	if resp := callGuarded(router, sessionToken(t, common1), trustedDevice(t, common1)); resp.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", resp.Code, resp.Body.String())
 	}
-	if resp := callGuarded(router, sessionToken(t, admin)); resp.Code != http.StatusOK {
+	if resp := callGuarded(router, sessionToken(t, admin), trustedDevice(t, admin)); resp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", resp.Code, resp.Body.String())
 	}
 }
@@ -159,10 +191,10 @@ func TestRequireRoleStacks(t *testing.T) {
 	root := addAuthUser(t, "auth-root2", common.RoleRootUser)
 
 	router, _ := guardedRouter(common.RoleAdminUser, common.RoleRootUser)
-	if resp := callGuarded(router, sessionToken(t, admin)); resp.Code != http.StatusForbidden {
+	if resp := callGuarded(router, sessionToken(t, admin), trustedDevice(t, admin)); resp.Code != http.StatusForbidden {
 		t.Fatalf("admin passed a root gate: %d body=%s", resp.Code, resp.Body.String())
 	}
-	if resp := callGuarded(router, sessionToken(t, root)); resp.Code != http.StatusOK {
+	if resp := callGuarded(router, sessionToken(t, root), trustedDevice(t, root)); resp.Code != http.StatusOK {
 		t.Fatalf("root blocked by stacked gates: %d body=%s", resp.Code, resp.Body.String())
 	}
 }
@@ -173,12 +205,13 @@ func TestRequireRoleFailsClosedOnStorageError(t *testing.T) {
 	setupAuthTest(t)
 	user := addAuthUser(t, "auth-adm4", common.RoleAdminUser)
 	token := sessionToken(t, user)
+	device := trustedDevice(t, user)
 	if err := model.DB.Migrator().DropTable(&model.User{}); err != nil {
 		t.Fatalf("drop users table: %v", err)
 	}
 
 	router, _ := guardedRouter(common.RoleAdminUser)
-	if resp := callGuarded(router, token); resp.Code != http.StatusServiceUnavailable {
+	if resp := callGuarded(router, token, device); resp.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d body=%s", resp.Code, resp.Body.String())
 	}
 }

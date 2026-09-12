@@ -63,6 +63,19 @@ func authenticate(c *gin.Context) (int, bool) {
 		abort(c, http.StatusServiceUnavailable, "server_error")
 		return 0, false
 	}
+	// The session proves the password; the device cookie must also have been
+	// verified by email for this user, or the console stays closed.
+	deviceID, _ := c.Cookie(common.DeviceCookieName)
+	trusted, err := model.IsTrustedDevice(userID, deviceID)
+	if err != nil {
+		common.LogError(c.Request.Context(), "session device lookup: "+err.Error())
+		abort(c, http.StatusServiceUnavailable, "server_error")
+		return 0, false
+	}
+	if !trusted {
+		abort(c, http.StatusUnauthorized, "device_verification_required")
+		return 0, false
+	}
 	c.Set(common.CtxUserID, userID)
 	c.Set(common.CtxRole, role)
 	return role, true

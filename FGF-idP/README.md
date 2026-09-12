@@ -170,7 +170,7 @@ DB_CONN_LIFETIME=60
 
 ## 管理後台
 
-`/admin` 是隨執行檔內嵌的管理主控台，與 `/login` 共用同一份資源目錄與嚴格 CSP。它有**獨立登入口** `POST /x/admin/login`，不需要先註冊 OAuth client，也不必繞授權流程；root 可直接以帳密進入。登出沿用既有的 `POST /x/logout`。
+`/admin` 是隨執行檔內嵌的管理主控台，與 `/login` 共用同一份資源目錄與嚴格 CSP。它有**獨立登入口** `POST /x/admin/login`，不需要先註冊 OAuth client，也不必繞授權流程；root 可直接以帳密進入，但**新裝置一樣要做 Email 驗證**：帳密正確而裝置未受信任時回 `203`，驗證連結在同一瀏覽器開啟後會導回 `/admin`；`/x/admin/*` 除了 session 也要求可信裝置 cookie，否則回 `401 device_verification_required`。因此沒有可用的 SMTP 就無法在新裝置進入後台。登出沿用既有的 `POST /x/logout`。
 
 權限採整數等級的 `>=` 門檻比較：
 
@@ -183,7 +183,7 @@ DB_CONN_LIFETIME=60
 
 端點：
 
-- `POST /x/admin/login`：JSON `{account, password}`，`account` 可填帳號或 Email。帳號不存在、密碼錯誤、權限不足一律回**完全相同**的 `401 {"error":"invalid_credentials"}`，避免帳號枚舉。
+- `POST /x/admin/login`：JSON `{account, password}`，`account` 可填帳號或 Email。帳號不存在、密碼錯誤、權限不足一律回**完全相同**的 `401 {"error":"invalid_credentials"}`，避免帳號枚舉。裝置未受信任時回 `203 {"message","email"}` 並寄出驗證信。
 - `GET /x/admin/me`：回 `{id, username, role}`。
 - `GET /x/admin/users?q=&page=&size=`：回 `{users, has_more}`；回應不含 `password`、`salt`、`access_token`。
 - `POST /x/admin/users`：建立使用者，接受 `username`、`display_name`（可選）、`email`、`password`、`role`（預設 1）；回 `201` 與不含憑證的使用者資料。
