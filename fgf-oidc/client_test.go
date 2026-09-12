@@ -138,7 +138,7 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 				if scenario == "subject" {
 					sub = "other"
 				}
-				json.NewEncoder(w).Encode(Identity{Subject: sub, Email: "owner@example.com", Name: "Owner"})
+				json.NewEncoder(w).Encode(Identity{Subject: sub, Email: "owner@example.com", Name: "Owner", Role: 6})
 			})
 			start := httptest.NewRecorder()
 			if err := cfg.Begin(start, httptest.NewRequest("GET", "/login", nil)); err != nil {
@@ -164,7 +164,7 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 			}
 			identity, err := cfg.Exchange(httptest.NewRecorder(), request, "code", state)
 			if scenario == "success" || scenario == "replay" {
-				if err != nil || identity.Subject != "owner-1" {
+				if err != nil || identity.Subject != "owner-1" || identity.Role != 6 {
 					t.Fatalf("login failed: %v", err)
 				}
 			} else if err == nil {

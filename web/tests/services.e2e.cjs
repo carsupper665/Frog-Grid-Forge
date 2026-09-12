@@ -17,7 +17,7 @@ async function checkSession(page,svc) {
       return { status:r.status, role:getTokenPayload()?.role };
     });
     assert.equal(response.status,200);
-    assert.equal(response.role,1);
+    assert.equal(response.role,6);
     await page.locator('.header .username').filter({hasText:'Root User'}).waitFor();
     assert.equal(await page.locator('.welcome-text .highlight').innerText(),'Root User');
 
@@ -26,7 +26,7 @@ async function checkSession(page,svc) {
     const response=await page.request.get(svc.url+route);assert.equal(response.status(),200,await response.text());
     const body=await response.json();assert(svc.name==='trading'?body.user?.sub:body.id);
     if(svc.name==='chaintrace') {
-      assert.equal(body.role,1);
+      assert.equal(body.role,6);
       assert.equal(body.display_name,'Root User');
       await page.locator('.user-card .owner-copy strong').filter({hasText:'Root User'}).waitFor();
       assert(!(await page.locator('.user-card .owner-copy').innerText()).includes(body.username));
